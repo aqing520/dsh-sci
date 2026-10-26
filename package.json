@@ -1,0 +1,32 @@
+{
+  "name": "dsh-sci",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.mjs",
+  "description": "A clean-room local research agent inspired by Rewind's workspace architecture.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "node --test --import tsx test/**/*.test.ts",
+    "desktop": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win portable"
+  },
+  "dependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "local.dshsci.app",
+    "productName": "dsh-sci",
+    "files": ["desktop/**/*", "dist/**/*", "package.json"],
+    "win": { "target": ["portable"] },
+    "extraFiles": [{ "from": "config/dsh-sci.config.json", "to": "dsh-sci.config.json" }]
+  }
+}

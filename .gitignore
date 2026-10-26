@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.dsh-sci/
+.env
+.env.local
+dsh-sci.config.json
+config/dsh-sci.config.json
+*.log
