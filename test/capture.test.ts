@@ -16,4 +16,8 @@ test("capture store writes an atomic snapshot and reports file changes", async (
   const second = await store.snapshot(workspace);
   assert.deepEqual(second.changes.changed, ["note.txt"]);
   assert.equal((await store.readStatus()).lastSnapshot, second.snapshotId);
+  const reopened = new CaptureStore(state);
+  const third = await reopened.snapshot(workspace);
+  assert.deepEqual(third.changes, { added: [], removed: [], changed: [] });
+  assert.equal((await reopened.listResearchRecords()).length, 2);
 });

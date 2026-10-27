@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added persistent research records linked to workspace snapshots, with explicit uncertainty fields for unverified inputs and unavailable tool attribution.
 - Removed the prototype AgentRuntime, its CLI, UI, tools, permissions and IPC endpoints. The desktop now runs only the official DSH runtime.
 - Pointed start/dev commands at the desktop app, moved compiler/test tooling to development dependencies, and clean generated output before building.
 - Removed unused prototype session logging APIs; retained workspace metadata capture and TokenFans credential loading.
