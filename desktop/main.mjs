@@ -7,6 +7,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let windowRef;
 let harnessProcess;
 let harnessUrl;
+let captureMonitor;
+let captureStore;
 let quitting = false;
 
 function packagedConfigFile() {
@@ -91,6 +93,10 @@ async function startOfficialHarness() {
   const { startHarness } = await import("../dist/src/harness.js");
   const home = path.join(app.getPath("userData"), "harness");
   const workspace = app.isPackaged ? app.getPath("documents") : process.cwd();
+  const { CaptureStore, WorkspaceCaptureMonitor } = await import("../dist/src/capture.js");
+  captureStore = new CaptureStore(path.join(app.getPath("userData"), "capture"));
+  captureMonitor = new WorkspaceCaptureMonitor(captureStore, workspace);
+  await captureMonitor.start();
   ensureTokenFansProfile(home);
   const bundled = bundledHarnessInvocation();
   let tokenFansApiKey = process.env.DSH_SCI_TOKENFANS_API_KEY;
@@ -149,6 +155,8 @@ ipcMain.handle("get-config", async (_event, request) => {
   };
 });
 
+ipcMain.handle("get-capture-status", async () => captureStore?.readStatus() ?? { schema: "dsh-sci.capture-status.v1", state: "idle", sessionCount: 0 });
+
 ipcMain.handle("choose-folder", async () => {
   const { dialog } = await import("electron");
   const result = await dialog.showOpenDialog(windowRef, { properties: ["openDirectory", "createDirectory"] });
@@ -161,6 +169,8 @@ app.whenReady().then(async () => {
     createWindow(url);
   } catch (error) {
     console.error("Official dsh Harness could not start:", error);
+    captureMonitor?.stop();
+    captureMonitor = undefined;
     if (process.env.DSH_SCI_RUNTIME === "legacy") createWindow();
     else createStartupErrorWindow(error);
   }
@@ -171,6 +181,7 @@ app.on("before-quit", (event) => {
   if (quitting || !harnessProcess) return;
   event.preventDefault();
   quitting = true;
+  captureMonitor?.stop();
   import("../dist/src/harness.js")
     .then(({ stopHarness }) => stopHarness(harnessProcess))
     .catch((error) => console.error("Failed to stop dsh Harness:", error))

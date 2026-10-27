@@ -9,3 +9,7 @@ config/dsh-sci.config.json
 release/
 research/rea/
 research/rewind-inspect/
+research/rewind-analysis*.json
+research/rewind-plugin-analysis*.json
+research/rewind-analysis-local/
+research/rewind-*-paths.json

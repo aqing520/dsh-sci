@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { CaptureStore } from "./capture.js";
+import { CaptureStore, WorkspaceCaptureMonitor } from "./capture.js";
 import { executeTool } from "./tools.js";
 import { toolSchemas } from "./provider.js";
 import type { AgentEvent, ModelProvider, WorkspaceConfig } from "./types.js";
@@ -7,11 +7,14 @@ import type { AgentEvent, ModelProvider, WorkspaceConfig } from "./types.js";
 export class AgentRuntime {
   readonly sessionId = randomUUID();
   private readonly capture: CaptureStore;
+  private readonly monitor: WorkspaceCaptureMonitor;
   constructor(private readonly config: WorkspaceConfig, private readonly provider: ModelProvider) {
     this.capture = new CaptureStore(config.stateRoot ?? `${config.root}/.dsh-sci`);
+    this.monitor = new WorkspaceCaptureMonitor(this.capture, config.root);
   }
 
   async run(prompt: string, maxSteps = 12): Promise<string> {
+    await this.monitor.start();
     const messages: Array<Record<string, unknown>> = [{ role: "user", content: prompt }];
     await this.event({ type: "user/message", data: { content: prompt } });
     let finalText = "";
@@ -39,6 +42,7 @@ export class AgentRuntime {
       }
     }
     await this.event({ type: "turn/end", data: { sessionId: this.sessionId } });
+    this.monitor.stop();
     return finalText;
   }
 

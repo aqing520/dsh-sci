@@ -29,7 +29,7 @@ export async function listWorkspace(root: string, relative = ".", depth = 2): Pr
         if (level < depth) await visit(full, level + 1);
       } else if (entry.isFile()) {
         const file = await stat(full);
-        result.push({ path: rel, kind: "file", bytes: file.size });
+        result.push({ path: rel, kind: "file", bytes: file.size, sha256: await hashFile(full) });
       }
     }
   }

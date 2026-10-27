@@ -75,4 +75,6 @@ When a default key is placed in `dsh-sci.config.json`, it is necessarily recover
 
 The project is a clean-room functional reconstruction. It contains newly written orchestration and local tooling based on observed behavior; it does not reproduce Rewind's proprietary source, embedded assets, or APIWharf's server-side implementation.
 
+当前版本已加入本地优先的捕获层：AgentRuntime 和官方 DSH 桌面启动时，会在用户数据目录下维护 `capture/sessions`、`capture/snapshots`、`capture/workspace-index.json` 和 `capture/capture-status.json`。快照记录文件大小、SHA-256 和新增/删除/变更列表；写入使用临时文件加原子替换。该层只做本地记录，不会自动上传工作区内容。
+
 The intended architecture is Electron host → isolated DSH Harness process → authenticated loopback Web UI → DSH plugins and profiles. This follows the public architecture used by the official Harness and community desktop hosts while keeping dsh-sci's own code in a separate integration layer.
