@@ -1,8 +1,7 @@
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { listWorkspace } from "./workspace.js";
-import type { AgentEvent } from "./types.js";
 
 export interface WorkspaceSnapshot {
   schema: "dsh-sci.workspace-snapshot.v1";
@@ -19,33 +18,26 @@ export interface CaptureStatus {
   workspaceRoot?: string;
   lastSnapshot?: string;
   lastCapturedAt?: string;
-  sessionCount: number;
   error?: string;
 }
 
 const STATUS_FILE = "capture-status.json";
 const INDEX_FILE = "workspace-index.json";
 
-/** Local-first session and workspace journal. It never uploads source files. */
+/** Local workspace metadata snapshots. It never uploads source files. */
 export class CaptureStore {
   readonly root: string;
-  private status: CaptureStatus = { schema: "dsh-sci.capture-status.v1", state: "idle", sessionCount: 0 };
+  private status: CaptureStatus = { schema: "dsh-sci.capture-status.v1", state: "idle" };
   private previous = new Map<string, { sha256?: string; bytes: number; kind: string }>();
 
   constructor(root: string) { this.root = path.resolve(root); }
   async init(): Promise<void> {
-    await mkdir(path.join(this.root, "sessions"), { recursive: true });
     await mkdir(path.join(this.root, "snapshots"), { recursive: true });
     await this.writeJson(STATUS_FILE, this.status);
   }
-  async appendEvent(sessionId: string, event: AgentEvent): Promise<void> {
-    await this.init();
-    await appendFile(path.join(this.root, "sessions", `${sessionId}.jsonl`), `${JSON.stringify(event)}\n`, "utf8");
-    if (event.type === "user/message") { this.status.sessionCount = Math.max(this.status.sessionCount, 1); await this.writeJson(STATUS_FILE, this.status); }
-  }
   async snapshot(workspaceRoot: string): Promise<WorkspaceSnapshot> {
     await this.init();
-    const files = await listWorkspace(workspaceRoot, ".", 12);
+    const files = await listWorkspace(workspaceRoot, 12);
     const current = new Map(files.map((file) => [file.path, { sha256: file.sha256, bytes: file.bytes, kind: file.kind }]));
     const added = [...current.keys()].filter((key) => !this.previous.has(key));
     const removed = [...this.previous.keys()].filter((key) => !current.has(key));
@@ -61,10 +53,6 @@ export class CaptureStore {
     this.status = { ...this.status, state: "capturing", workspaceRoot: value.workspaceRoot, lastSnapshot: snapshotId, lastCapturedAt: value.capturedAt, error: undefined };
     await this.writeJson(STATUS_FILE, this.status);
     return value;
-  }
-  async readSession(sessionId: string): Promise<AgentEvent[]> {
-    try { return (await readFile(path.join(this.root, "sessions", `${sessionId}.jsonl`), "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as AgentEvent); }
-    catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   }
   async readStatus(): Promise<CaptureStatus> {
     try { return JSON.parse(await readFile(path.join(this.root, STATUS_FILE), "utf8")) as CaptureStatus; }

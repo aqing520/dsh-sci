@@ -6,9 +6,9 @@
   "main": "desktop/main.mjs",
   "description": "A local-first desktop workspace agent built on the official DeepSeek Harness runtime.",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/src/index.js",
-    "dev": "tsx src/index.ts",
+    "build": "node scripts/clean-build.mjs && tsc -p tsconfig.json",
+    "start": "npm run desktop",
+    "dev": "npm run desktop:dev",
     "test": "node --test --import tsx test/**/*.test.ts",
     "desktop": "npm run build && electron .",
     "desktop:dev": "npm run desktop",
@@ -16,14 +16,14 @@
     "dsh:web": "node node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.2.1-rc.2",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "@deepseek-ai/dsh": "0.2.1-rc.2"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "electron": "44.7.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
   },
   "build": {
     "appId": "local.dshsci.app",

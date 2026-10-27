@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { assertReadable, canonicalPath } from "./permissions.js";
 
 export interface WorkspaceEntry {
   path: string;
@@ -12,10 +11,9 @@ export interface WorkspaceEntry {
 
 const ignored = new Set([".git", "node_modules", ".dsh-sci", "dist"]);
 
-export async function listWorkspace(root: string, relative = ".", depth = 2): Promise<WorkspaceEntry[]> {
-  const base = canonicalPath(root);
-  const target = path.resolve(base, relative);
-  assertReadable(base, target);
+export async function listWorkspace(root: string, depth = 12): Promise<WorkspaceEntry[]> {
+  const base = path.resolve(root);
+  const target = base;
   const info = await stat(target);
   if (!info.isDirectory()) throw new Error(`Not a directory: ${target}`);
   const result: WorkspaceEntry[] = [];
@@ -37,16 +35,6 @@ export async function listWorkspace(root: string, relative = ".", depth = 2): Pr
   return result.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export async function readWorkspaceFile(root: string, relative: string, maxBytes = 2 * 1024 * 1024): Promise<string> {
-  const base = canonicalPath(root);
-  const target = path.resolve(base, relative);
-  assertReadable(base, target);
-  const info = await stat(target);
-  if (!info.isFile()) throw new Error(`Not a regular file: ${relative}`);
-  if (info.size > maxBytes) throw new Error(`File exceeds ${maxBytes} byte read limit: ${relative}`);
-  return readFile(target, "utf8");
-}
-
-export async function hashFile(file: string): Promise<string> {
+async function hashFile(file: string): Promise<string> {
   return createHash("sha256").update(await readFile(file)).digest("hex");
 }

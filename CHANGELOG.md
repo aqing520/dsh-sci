@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Removed the prototype AgentRuntime, its CLI, UI, tools, permissions and IPC endpoints. The desktop now runs only the official DSH runtime.
+- Pointed start/dev commands at the desktop app, moved compiler/test tooling to development dependencies, and clean generated output before building.
+- Removed unused prototype session logging APIs; retained workspace metadata capture and TokenFans credential loading.
+
 ## 0.2.2 - 2026-10-27
 
 - Added a built-in TokenFans Codex provider for the official DSH Web profile.
@@ -22,7 +28,6 @@
 - Pinned Electron to the official DSH-compatible 44.7.0 runtime and added a direct developer launch command.
 - Startup failures now include sanitized Harness diagnostics instead of only reporting the exit code.
 - Changed Windows packaging from portable-only output to an NSIS installer target.
-- Kept the previous AgentRuntime behind an explicit `DSH_SCI_RUNTIME=legacy` development switch.
 
 ## 0.1.0 - 2026-10-26
 

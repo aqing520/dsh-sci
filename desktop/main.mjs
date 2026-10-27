@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow } from "electron";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,6 @@ let windowRef;
 let harnessProcess;
 let harnessUrl;
 let captureMonitor;
-let captureStore;
 let quitting = false;
 
 function packagedConfigFile() {
@@ -24,15 +23,12 @@ function createWindow(url) {
     minHeight: 600,
     title: "dsh-sci",
     webPreferences: {
-      preload: path.join(here, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
   if (url) {
     windowRef.loadURL(url);
-  } else {
-    windowRef.loadFile(path.join(here, "index.html"));
   }
 }
 
@@ -89,25 +85,23 @@ ${marker}
 }
 
 async function startOfficialHarness() {
-  if (process.env.DSH_SCI_RUNTIME === "legacy") return undefined;
   const { startHarness } = await import("../dist/src/harness.js");
   const home = path.join(app.getPath("userData"), "harness");
   const workspace = app.isPackaged ? app.getPath("documents") : process.cwd();
   const { CaptureStore, WorkspaceCaptureMonitor } = await import("../dist/src/capture.js");
-  captureStore = new CaptureStore(path.join(app.getPath("userData"), "capture"));
+  const captureStore = new CaptureStore(path.join(app.getPath("userData"), "capture"));
   captureMonitor = new WorkspaceCaptureMonitor(captureStore, workspace);
   await captureMonitor.start();
   ensureTokenFansProfile(home);
   const bundled = bundledHarnessInvocation();
   let tokenFansApiKey = process.env.DSH_SCI_TOKENFANS_API_KEY;
   try {
-    const { loadProviderSelection } = await import("../dist/src/config.js");
-    const selection = await loadProviderSelection({
+    const { loadTokenFansApiKey } = await import("../dist/src/config.js");
+    const configuredKey = await loadTokenFansApiKey({
       workspace,
-      providerId: "tokenfans-codex",
       ...(fs.existsSync(packagedConfigFile()) ? { configFile: packagedConfigFile() } : {}),
     });
-    tokenFansApiKey = selection.apiKey ?? tokenFansApiKey;
+    tokenFansApiKey = configuredKey ?? tokenFansApiKey;
   } catch (error) {
     console.warn("Could not load the optional TokenFans configuration:", error);
   }
@@ -127,42 +121,6 @@ async function startOfficialHarness() {
   return result.url;
 }
 
-ipcMain.handle("run-agent", async (_event, request) => {
-  const { AgentRuntime } = await import("../dist/src/agent.js");
-  const { OpenAIResponsesProvider } = await import("../dist/src/provider.js");
-  const { loadProviderSelection } = await import("../dist/src/config.js");
-  const workspace = path.resolve(String(request.workspace || process.cwd()));
-  const provider = await loadProviderSelection({
-    workspace,
-    configFile: packagedConfigFile(),
-    providerId: request.providerId,
-    baseUrl: request.baseUrl,
-    model: request.model,
-    apiKey: request.apiKey,
-  });
-  const runtime = new AgentRuntime({ root: workspace, permission: request.permission || "read-only" }, new OpenAIResponsesProvider(provider));
-  const text = await runtime.run(String(request.prompt || ""));
-  return { text, snapshot: await runtime.snapshot(), provider: provider.label };
-});
-
-ipcMain.handle("get-config", async (_event, request) => {
-  const { loadProviderSelection, PROVIDER_PROFILES } = await import("../dist/src/config.js");
-  const workspace = path.resolve(String(request?.workspace || process.cwd()));
-  const provider = await loadProviderSelection({ workspace, configFile: packagedConfigFile() });
-  return {
-    profiles: PROVIDER_PROFILES.map(({ id, label, baseUrl, model }) => ({ id, label, baseUrl, model })),
-    selected: { providerId: provider.providerId, label: provider.label, baseUrl: provider.baseUrl, model: provider.model, hasApiKey: Boolean(provider.apiKey) },
-  };
-});
-
-ipcMain.handle("get-capture-status", async () => captureStore?.readStatus() ?? { schema: "dsh-sci.capture-status.v1", state: "idle", sessionCount: 0 });
-
-ipcMain.handle("choose-folder", async () => {
-  const { dialog } = await import("electron");
-  const result = await dialog.showOpenDialog(windowRef, { properties: ["openDirectory", "createDirectory"] });
-  return result.canceled ? undefined : result.filePaths[0];
-});
-
 app.whenReady().then(async () => {
   try {
     const url = await startOfficialHarness();
@@ -171,10 +129,11 @@ app.whenReady().then(async () => {
     console.error("Official dsh Harness could not start:", error);
     captureMonitor?.stop();
     captureMonitor = undefined;
-    if (process.env.DSH_SCI_RUNTIME === "legacy") createWindow();
-    else createStartupErrorWindow(error);
+    createStartupErrorWindow(error);
   }
-  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(harnessUrl); });
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0 && harnessUrl) createWindow(harnessUrl);
+  });
 });
 
 app.on("before-quit", (event) => {

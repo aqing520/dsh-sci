@@ -2,7 +2,7 @@
 
 Current version: **0.2.2**. Release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
-`dsh-sci` is a local-first desktop host built on the official open-source DeepSeek Harness runtime. The desktop process starts a bundled DSH Web profile and loads its authenticated loopback UI. Project-specific behavior belongs in DSH-compatible plugins and patches; the previous small AgentRuntime remains available only as an explicit legacy development mode.
+`dsh-sci` is a local-first desktop host built on the official open-source DeepSeek Harness runtime. The desktop process starts a bundled DSH Web profile and loads its authenticated loopback UI. Project-specific behavior belongs in DSH-compatible plugins and patches.
 
 It does not contain APIWharf server code or copied proprietary source. The provider layer accepts an OpenAI Responses compatible endpoint, so a compatible API can be supplied through environment variables.
 
@@ -10,8 +10,7 @@ It does not contain APIWharf server code or copied proprietary source. The provi
 
 ```powershell
 npm install
-npm run build
-node dist/src/index.js --workspace D:\path\to\project --permission read-only "Summarize the project files"
+npm run desktop:dev
 ```
 
 The desktop development command starts the official DSH runtime through the local `@deepseek-ai/dsh` package. It stores the Harness home under Electron's per-user data directory and disables telemetry by default for this local build:
@@ -26,7 +25,7 @@ When launched from an installed shortcut, the initial DSH workspace is the curre
 
 开发过程中不需要反复安装 exe：在项目目录运行 `npm run desktop:dev`（或 `npm run desktop`）即可直接启动 Electron 开发版本。修改主进程或 TypeScript 后重新运行该命令；只有准备交付给别人时才运行 `npm run dist:win` 生成安装包。
 
-Set `DSH_SCI_RUNTIME=legacy` only when debugging the old prototype UI. A packaged build uses the bundled DSH runtime and does not require a separate `dsh` command or Node.js installation on the target computer.
+A packaged build uses the bundled DSH runtime and does not require a separate `dsh` command or Node.js installation on the target computer.
 
 Environment variables and local provider selection:
 
@@ -54,14 +53,6 @@ Without an API key, the agent reports that model access is unavailable. Local in
 - `workspace-write`: also create or replace files under the workspace root.
 - `full-access`: also permits command execution. Treat this mode as trusted local code execution.
 
-## Local inspection
-
-```powershell
-node dist/src/index.js --workspace D:\path\to\project --list-files --depth 3
-node dist/src/index.js --workspace D:\path\to\project --read-file README.md
-node dist/src/index.js --workspace D:\path\to\project --snapshot
-```
-
 ## Desktop app and Windows package
 
 ```powershell
@@ -69,12 +60,10 @@ npm run desktop       # compile and open the Electron desktop app
 npm run dist:win     # produce a Windows NSIS installer under release/
 ```
 
-The current desktop shell is being migrated to the official DSH Web UI. The old settings page is retained only as a legacy development fallback; it is not the product architecture for new features.
-
 When a default key is placed in `dsh-sci.config.json`, it is necessarily recoverable by anyone who receives that file or the packaged executable. Remove the file and enter the key in the settings panel when the key must remain private.
 
 The project is a clean-room functional reconstruction. It contains newly written orchestration and local tooling based on observed behavior; it does not reproduce Rewind's proprietary source, embedded assets, or APIWharf's server-side implementation.
 
-当前版本已加入本地优先的捕获层：AgentRuntime 和官方 DSH 桌面启动时，会在用户数据目录下维护 `capture/sessions`、`capture/snapshots`、`capture/workspace-index.json` 和 `capture/capture-status.json`。快照记录文件大小、SHA-256 和新增/删除/变更列表；写入使用临时文件加原子替换。该层只做本地记录，不会自动上传工作区内容。
+当前版本已加入本地优先的工作区捕获层：官方 DSH 桌面启动时会在用户数据目录下维护 `capture/snapshots`、`capture/workspace-index.json` 和 `capture/capture-status.json`。快照记录文件大小、SHA-256 和新增/删除/变更列表；写入使用临时文件加原子替换。该层只做本地元数据记录，不会自动上传工作区内容。
 
 The intended architecture is Electron host → isolated DSH Harness process → authenticated loopback Web UI → DSH plugins and profiles. This follows the public architecture used by the official Harness and community desktop hosts while keeping dsh-sci's own code in a separate integration layer.
