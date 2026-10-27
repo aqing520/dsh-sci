@@ -1,32 +1,63 @@
 {
   "name": "dsh-sci",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "main": "desktop/main.mjs",
-  "description": "A clean-room local research agent inspired by Rewind's workspace architecture.",
+  "description": "A local-first desktop workspace agent built on the official DeepSeek Harness runtime.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/index.js",
     "dev": "tsx src/index.ts",
     "test": "node --test --import tsx test/**/*.test.ts",
     "desktop": "npm run build && electron .",
-    "dist:win": "npm run build && electron-builder --win portable"
+    "desktop:dev": "npm run desktop",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dsh:web": "node node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open"
   },
   "dependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
-    "electron": "^39.0.0",
-    "electron-builder": "^26.0.12"
+    "electron": "44.7.0",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "local.dshsci.app",
     "productName": "dsh-sci",
-    "files": ["desktop/**/*", "dist/**/*", "package.json"],
-    "win": { "target": ["portable"] },
-    "extraFiles": [{ "from": "config/dsh-sci.config.json", "to": "dsh-sci.config.json" }]
+    "asar": true,
+    "asarUnpack": [
+      "**/*.{node,dll,exe,so,dylib}",
+      "**/*.so.*"
+    ],
+    "npmRebuild": false,
+    "files": [
+      "desktop/**/*",
+      "dist/src/**/*",
+      "node_modules/**/*",
+      "package.json",
+      "!node_modules/electron{,/**}",
+      "!node_modules/electron-builder{,/**}",
+      "!node_modules/typescript{,/**}",
+      "!node_modules/tsx{,/**}",
+      "!node_modules/@types{,/**}"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

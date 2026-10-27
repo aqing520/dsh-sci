@@ -6,3 +6,6 @@ dist/
 dsh-sci.config.json
 config/dsh-sci.config.json
 *.log
+release/
+research/rea/
+research/rewind-inspect/

@@ -1,8 +1,8 @@
 # dsh-sci
 
-Current version: **0.1.0**. Release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
+Current version: **0.2.2**. Release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
-`dsh-sci` is a clean-room reconstruction of the useful local architecture observed in Rewind: a workspace-scoped agent runtime, permission modes, local tools, model-provider adapter, and durable session/workspace capture.
+`dsh-sci` is a local-first desktop host built on the official open-source DeepSeek Harness runtime. The desktop process starts a bundled DSH Web profile and loads its authenticated loopback UI. Project-specific behavior belongs in DSH-compatible plugins and patches; the previous small AgentRuntime remains available only as an explicit legacy development mode.
 
 It does not contain APIWharf server code or copied proprietary source. The provider layer accepts an OpenAI Responses compatible endpoint, so a compatible API can be supplied through environment variables.
 
@@ -14,6 +14,20 @@ npm run build
 node dist/src/index.js --workspace D:\path\to\project --permission read-only "Summarize the project files"
 ```
 
+The desktop development command starts the official DSH runtime through the local `@deepseek-ai/dsh` package. It stores the Harness home under Electron's per-user data directory and disables telemetry by default for this local build:
+
+```powershell
+npm run desktop
+```
+
+When launched from an installed shortcut, the initial DSH workspace is the current user's Documents directory. The DSH directory picker can then switch to a project folder.
+
+启动时 dsh-sci 会自动注册一个 `TokenFans Codex` 自定义提供方，使用 OpenAI Responses 兼容协议和 `https://tokenfans.ai/codex`。它会读取 `DSH_SCI_TOKENFANS_API_KEY`，也可以在 exe 旁边的 `dsh-sci.config.json` 中配置；进入 DSH 的设置 → Models 后即可看到并选择该模型。TokenFans 密钥不会写入 profile 配置文件。
+
+开发过程中不需要反复安装 exe：在项目目录运行 `npm run desktop:dev`（或 `npm run desktop`）即可直接启动 Electron 开发版本。修改主进程或 TypeScript 后重新运行该命令；只有准备交付给别人时才运行 `npm run dist:win` 生成安装包。
+
+Set `DSH_SCI_RUNTIME=legacy` only when debugging the old prototype UI. A packaged build uses the bundled DSH runtime and does not require a separate `dsh` command or Node.js installation on the target computer.
+
 Environment variables and local provider selection:
 
 - `DSH_SCI_PROVIDER` (`tokenfans-codex`, `openai`, or `custom`; default: `tokenfans-codex`)
@@ -23,11 +37,13 @@ Environment variables and local provider selection:
 
 For local development, put these values in an ignored `.env.local` file. The packaged desktop build also reads `dsh-sci.config.json` beside the executable, so it can start with a default provider without environment variables:
 
-```text
-DSH_SCI_PROVIDER=tokenfans-codex
-DSH_SCI_BASE_URL=https://tokenfans.ai/codex
-DSH_SCI_MODEL=gpt-6.1-sol
-DSH_SCI_TOKENFANS_API_KEY=your-key-here
+```json
+{
+  "DSH_SCI_PROVIDER": "tokenfans-codex",
+  "DSH_SCI_BASE_URL": "https://tokenfans.ai/codex",
+  "DSH_SCI_MODEL": "gpt-6.1-sol",
+  "DSH_SCI_TOKENFANS_API_KEY": "your-key-here"
+}
 ```
 
 Without an API key, the agent reports that model access is unavailable. Local inspection is still available through `--list-files`, `--read-file`, and `--snapshot`.
@@ -50,13 +66,13 @@ node dist/src/index.js --workspace D:\path\to\project --snapshot
 
 ```powershell
 npm run desktop       # compile and open the Electron desktop app
-npm run dist:win     # produce a portable Windows executable under release/
+npm run dist:win     # produce a Windows NSIS installer under release/
 ```
 
-The desktop window exposes provider, model, endpoint, API key, workspace, permission, and prompt fields. It sends the key only to the local main process for the current request; packaged files do not include `.env.local`.
+The current desktop shell is being migrated to the official DSH Web UI. The old settings page is retained only as a legacy development fallback; it is not the product architecture for new features.
 
 When a default key is placed in `dsh-sci.config.json`, it is necessarily recoverable by anyone who receives that file or the packaged executable. Remove the file and enter the key in the settings panel when the key must remain private.
 
 The project is a clean-room functional reconstruction. It contains newly written orchestration and local tooling based on observed behavior; it does not reproduce Rewind's proprietary source, embedded assets, or APIWharf's server-side implementation.
 
-The core runtime is deliberately separate from any future Electron UI. This keeps the permission boundary and capture behavior testable.
+The intended architecture is Electron host → isolated DSH Harness process → authenticated loopback Web UI → DSH plugins and profiles. This follows the public architecture used by the official Harness and community desktop hosts while keeping dsh-sci's own code in a separate integration layer.
