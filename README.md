@@ -66,4 +66,6 @@ The project is a clean-room functional reconstruction. It contains newly written
 
 当前版本已加入本地优先的工作区捕获层：官方 DSH 桌面启动时会在用户数据目录下维护 `capture/snapshots`、`capture/workspace-index.json`、`capture/capture-status.json` 和 `capture/research-records.json`。快照记录文件大小、SHA-256 和新增/删除/变更列表；科研记录使用 `dsh-sci.research-record.v1` 格式，保存运行 ID、项目 ID、快照关联和捕获状态。记录会跨重启恢复比较基线，写入使用临时文件加原子替换。该层只做本地元数据记录，不会自动上传工作区内容，也不会宣称已完成精确实验输入或工具归因。
 
+DSH 生命周期也会通过独立的 `dsh-sci-lifecycle` 插件记录到 `capture/sessions/dsh-session-events.jsonl`。它捕获会话创建、会话事件、Agent 状态、刷新和销毁边界，限制事件大小并过滤密钥、令牌、Cookie、密码等敏感字段。该日志只写入本机，不会上传；它是运行过程观察记录，不能替代经过验证的实验输入或完整工具归因。
+
 The intended architecture is Electron host → isolated DSH Harness process → authenticated loopback Web UI → DSH plugins and profiles. This follows the public architecture used by the official Harness and community desktop hosts while keeping dsh-sci's own code in a separate integration layer.

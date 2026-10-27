@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added a local DSH lifecycle plugin that records sanitized session events and agent status transitions in JSONL for research-run traceability.
 - Added persistent research records linked to workspace snapshots, with explicit uncertainty fields for unverified inputs and unavailable tool attribution.
 - Removed the prototype AgentRuntime, its CLI, UI, tools, permissions and IPC endpoints. The desktop now runs only the official DSH runtime.
 - Pointed start/dev commands at the desktop app, moved compiler/test tooling to development dependencies, and clean generated output before building.

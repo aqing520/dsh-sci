@@ -1,7 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import path from "node:path";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let windowRef;
@@ -82,6 +82,17 @@ ${marker}
   if (!configured.includes(defaultsMarker)) {
     fs.writeFileSync(patchFile, `${configured.trimEnd()}\n\n${defaultsMarker}\n- id: llm-deepseek\n  disabled: true\n- id: llm-deepseek-account\n  disabled: true\n- id: agent-default-model\n  config:\n    provider: tokenfans-codex\n    model: "gpt-6.1-sol"\n`, "utf8");
   }
+  const lifecycleFile = path.join(home, "plugins", "dsh-sci-lifecycle-plugin.mjs");
+  fs.mkdirSync(path.dirname(lifecycleFile), { recursive: true });
+  fs.copyFileSync(path.join(here, "dsh-sci-lifecycle-plugin.mjs"), lifecycleFile);
+  const lifecyclePatch = pathToFileURL(lifecycleFile).href;
+  const finalPatch = fs.readFileSync(patchFile, "utf8");
+  const lifecycleBlock = `# dsh-sci: lifecycle-plugin\n- insert:\n  - id: dsh-sci-lifecycle\n    name: ${JSON.stringify(lifecyclePatch)}\n# dsh-sci: lifecycle-plugin-end`;
+  const lifecyclePattern = /# dsh-sci: lifecycle-plugin\n[\\s\\S]*?(?:# dsh-sci: lifecycle-plugin-end|$)/;
+  const withoutLifecycle = lifecyclePattern.test(finalPatch)
+    ? finalPatch.replace(lifecyclePattern, "").trimEnd()
+    : finalPatch.trimEnd();
+  fs.writeFileSync(patchFile, `${withoutLifecycle}\n\n${lifecycleBlock}\n`, "utf8");
 }
 
 async function startOfficialHarness() {
@@ -92,6 +103,7 @@ async function startOfficialHarness() {
   const captureStore = new CaptureStore(path.join(app.getPath("userData"), "capture"));
   captureMonitor = new WorkspaceCaptureMonitor(captureStore, workspace);
   await captureMonitor.start();
+  process.env.DSH_SCI_CAPTURE_ROOT = path.join(app.getPath("userData"), "capture");
   ensureTokenFansProfile(home);
   const bundled = bundledHarnessInvocation();
   let tokenFansApiKey = process.env.DSH_SCI_TOKENFANS_API_KEY;
