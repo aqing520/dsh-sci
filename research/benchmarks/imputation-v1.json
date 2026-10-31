@@ -1,0 +1,64 @@
+{
+  "schema": "dsh-sci.research-benchmark.v1",
+  "caseId": "imputation-v1",
+  "protocolVersion": 1,
+  "question": "在 MCAR 缺失机制下，均值插补与中位数插补对有偏分布数据的恢复误差有何差异？结论是否随损失函数及数据分布改变？",
+  "scope": "Literature review and reproducible local simulation only; no clinical or general missing-data recommendation.",
+  "data": {
+    "sampleSize": 2000,
+    "independentReplicates": 100,
+    "distributions": [
+      { "name": "lognormal", "normalMean": 0, "normalStdDev": 1 },
+      { "name": "normal", "mean": 0, "stdDev": 1 }
+    ],
+    "missingMechanism": "MCAR",
+    "missingFractions": [0.1, 0.3, 0.5],
+    "seed": 20261030,
+    "randomGenerator": "mulberry32-v1 with Box-Muller normal draws; implementation must be saved and reviewed before execution",
+    "maskRule": "For each replicate and fraction, choose floor(n*fraction) indices by a seeded Fisher-Yates shuffle independent of values. Both methods use identical data and mask.",
+    "fittingRule": "Estimate mean and median only from observed entries. Hidden ground truth is used only to score missing entries.",
+    "replicationRule": "Generate independent data and mask streams per replicate and condition; persist stream seeds. Individual missing cells are not independent experimental replicates."
+  },
+  "analysis": {
+    "primaryCondition": { "distribution": "lognormal", "missingFraction": 0.3 },
+    "primaryMetric": "Mean squared error on masked entries, averaged across independent replicates",
+    "secondaryMetric": "Mean absolute error on masked entries; exploratory, reported separately from the primary endpoint",
+    "contrast": "Per-replicate MSE(mean imputation) minus MSE(median imputation); negative favors mean, positive favors median",
+    "experimentalUnit": "Independent simulation replicate, paired across methods",
+    "confidenceInterval": "Paired percentile bootstrap of replicate differences, 10000 resamples, 95% interval, fixed recorded bootstrap seed",
+    "practicalEffect": "Absolute mean MSE difference divided by mean MSE of mean imputation; 0.02 threshold. Report raw differences too.",
+    "interpretation": "Separate interval exclusion of zero, practical effect and design limitations. Non-significance does not establish equivalence. MAE cannot replace the prespecified primary MSE after observing outcomes.",
+    "additionalConditions": "Other distributions and missing fractions are exploratory robustness checks; no uncorrected confirmatory multiple-testing claims.",
+    "insufficientEvidenceControl": { "independentReplicates": 8, "rule": "Fewer than 30 replicates requires inconclusive/review regardless of an apparently narrow interval" },
+    "symmetricControl": "Normal distribution is a control for generalization; do not force a null or a preferred winner. Mean and median estimates can differ in finite samples."
+  },
+  "stopping": {
+    "maxResearchIterations": 2,
+    "rule": "Stop on documented design completion, explicit limitation, unresolved review or exhausted budget; no optional stopping based on favorable p-values."
+  },
+  "budget": {
+    "maxModelRequests": 32,
+    "maxTaskExecutions": 12,
+    "maxModelStepsPerTask": 12,
+    "maxTaskAttempts": 2,
+    "taskTimeoutMs": 120000,
+    "wallTimeoutMs": 720000,
+    "maxOutputTokensPerRequest": 6144,
+    "cost": "Unknown unless explicitly returned by provider; no invented price conversion"
+  },
+  "literature": {
+    "minimumIndependentSources": 3,
+    "seedReferences": [
+      "https://scikit-learn.org/stable/modules/impute.html",
+      "https://stefvanbuuren.name/fimd/sec-simplesolutions.html",
+      "https://pmc.ncbi.nlm.nih.gov/articles/PMC3668100/"
+    ],
+    "seedPolicy": "Starting URLs are human-supplied discovery hints, not verified evidence or a substitute for autonomous search. Retrieve and assess relevance, reading scope and supporting quotes."
+  },
+  "approval": {
+    "automaticallyApproveTasks": false,
+    "automaticallyExecuteExperiments": false,
+    "rule": "The baseline stops at approval; lack of execution is recorded, never synthesized. Any later explicit experiment approval must name the immutable proposal."
+  },
+  "requiredArtifacts": ["literature-log", "falsifiable-hypothesis", "experiment-design", "reviewed-code", "environment-manifest", "replicate-metrics", "statistical-evaluation", "iteration-decision", "evidence-report", "cross-session-memory-evidence"]
+}
