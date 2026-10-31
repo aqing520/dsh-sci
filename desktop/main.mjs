@@ -314,6 +314,14 @@ function installCaptureIpc() {
     if (!input || typeof input.question !== "string") throw new Error("Research question is required");
     return researchOrchestrator.createProject(input.question, { title: typeof input.title === "string" ? input.title : undefined, plan: input.plan, budget: input.budget });
   });
+  researchIpc.handle("research:delete", async (event, input) => {
+    assertResearchWindow(event);
+    if (!researchRepository) throw new Error("Research repository is not ready");
+    const projectId = String(typeof input === "string" ? input : input?.projectId ?? "").trim();
+    if (!projectId) throw new Error("Research project ID is required");
+    if (researchAgentRuns.has(projectId)) throw new Error("Cancel the active DSH research run before deleting the project");
+    return researchRepository.deleteProject(projectId);
+  });
   researchIpc.handle("research:budget-read", async (event, projectId) => { assertResearchWindow(event); if (!researchRepository) throw new Error("Research repository is not ready"); if (!await researchRepository.readProject(String(projectId))) throw new Error("Research project not found"); return researchRepository.readBudget(String(projectId)); });
   researchIpc.handle("research:budget-update", async (event, input) => {
     assertResearchWindow(event);
