@@ -34,7 +34,7 @@ let startupIpcInstalled = false;
 let runtimeSettingsFile;
 let runtimeSettings = { schema: "dsh-sci.runtime-settings.v1", provider: {}, service: {} };
 let researchBridge;
-let researchAgentProviderConfig = { provider: "tokenfans-codex", baseUrl: "", model: "" };
+let researchAgentProviderConfig = { provider: "deepseek", baseUrl: "", model: "" };
 let researchAgentApiKey;
 const researchAgentRuns = new Map();
 
@@ -288,7 +288,7 @@ function installCaptureIpc() {
   researchIpc.handle("research:run-agent", async (event, input) => {
     assertResearchWindow(event);
     if (!researchOrchestrator || !researchBridge) throw new Error("Research agent is not ready");
-    if (!researchAgentApiKey) throw new Error("Research agent provider API key is not configured");
+    if (researchAgentProviderConfig.provider === "deepseek") throw new Error("The automatic research runner needs an OpenAI Responses-compatible provider (OpenAI, TokenFans or custom); official DeepSeek is only supported in the chat workspace.");
     const projectId = typeof input?.projectId === "string" ? input.projectId.trim() : "";
     if (!projectId) throw new Error("Research project ID is required");
     if (researchAgentRuns.size) throw new Error("A DSH research run is already active; wait or cancel it first");
@@ -438,8 +438,8 @@ async function startOfficialHarness() {
   await researchRepository.recoverInterruptedExperiments();
   process.env.DSH_SCI_CAPTURE_ROOT = path.join(app.getPath("userData"), "capture");
   const bundled = bundledHarnessInvocation();
-  let providerConfig = { provider: process.env.DSH_SCI_PROVIDER ?? "tokenfans-codex", baseUrl: process.env.DSH_SCI_BASE_URL ?? "https://tokenfans.ai/codex", model: process.env.DSH_SCI_MODEL ?? "gpt-6.1-sol" };
-  let providerApiKey = process.env.DSH_SCI_API_KEY ?? process.env.DSH_SCI_TOKENFANS_API_KEY;
+  let providerConfig = { provider: process.env.DSH_SCI_PROVIDER ?? "deepseek", baseUrl: process.env.DSH_SCI_BASE_URL ?? "https://api.deepseek.com", model: process.env.DSH_SCI_MODEL ?? "deepseek-v4-pro" };
+  let providerApiKey = process.env.DSH_SCI_API_KEY ?? process.env.DSH_SCI_TOKENFANS_API_KEY ?? process.env.DEEPSEEK_API_KEY;
   try {
     const { loadProviderConfig } = await import("../dist/src/config.js");
     providerConfig = await loadProviderConfig({ workspace, env: { ...runtimeSettingsToEnvironment(runtimeSettings), ...process.env }, ...(fs.existsSync(packagedConfigFile()) ? { configFile: packagedConfigFile() } : {}) });
@@ -451,7 +451,7 @@ async function startOfficialHarness() {
   researchAgentProviderConfig = { provider: providerConfig.provider, baseUrl: providerConfig.baseUrl, model: providerConfig.model };
   researchAgentApiKey = providerApiKey;
   let researchPlanner;
-  if (providerApiKey) researchPlanner = new (await import("../dist/src/research/planner.js")).ModelResearchPlanner(new ModelGateway({ config: providerConfig }), providerConfig.model);
+  if (providerApiKey && providerConfig.provider !== "deepseek") researchPlanner = new (await import("../dist/src/research/planner.js")).ModelResearchPlanner(new ModelGateway({ config: providerConfig }), providerConfig.model);
   if (process.env.DSH_SCI_MEMORY_EMBEDDINGS === "1") {
     const { loadMemoryEmbedder } = await import("../dist/src/research/memory-provider.js");
     memoryOptions = { embedder: await loadMemoryEmbedder({ workspace, env: { ...runtimeSettingsToEnvironment(runtimeSettings), ...process.env }, ...(fs.existsSync(packagedConfigFile()) ? { configFile: packagedConfigFile() } : {}) }) };
@@ -535,6 +535,7 @@ async function startOfficialHarness() {
     environment: {
       ...bundled?.environment,
       DSH_TELEMETRY_DISABLED: process.env.DSH_TELEMETRY_DISABLED ?? "1",
+      DEEPSEEK_API_KEY: providerProfileIdentity(providerConfig.provider).env === "DEEPSEEK_API_KEY" ? providerApiKey : undefined,
       TOKENFANS_API_KEY: providerProfileIdentity(providerConfig.provider).env === "TOKENFANS_API_KEY" ? providerApiKey : undefined,
       OPENAI_API_KEY: providerProfileIdentity(providerConfig.provider).env === "OPENAI_API_KEY" ? providerApiKey : undefined,
       DSH_SCI_API_KEY: providerProfileIdentity(providerConfig.provider).env === "DSH_SCI_API_KEY" ? providerApiKey : undefined,

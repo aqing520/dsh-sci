@@ -23,7 +23,7 @@ export interface RuntimeSettings {
 }
 
 const SCHEMA = "dsh-sci.runtime-settings.v1" as const;
-const PROVIDERS = new Set<ProviderKind>(["tokenfans-codex", "openai", "custom"]);
+const PROVIDERS = new Set<ProviderKind>(["deepseek", "tokenfans-codex", "openai", "custom"]);
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};

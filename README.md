@@ -48,7 +48,7 @@
 
 模型层使用 OpenAI Responses 兼容协议，支持普通响应、SSE 流式响应、超时、取消、重试和错误分类。内置：
 
-- `tokenfans-codex`：默认 TokenFans Codex 路由。
+- `deepseek`：DeepSeek 官方（默认，使用 DSH 内置 DeepSeek 路由）。
 - `openai`：OpenAI 官方接口。
 - `custom`：任意兼容 `/responses` 的代理或本地服务。
 
@@ -77,14 +77,11 @@ npm run desktop:dev
 
 开发环境在项目根目录创建被 Git 忽略的 `.env.local`：
 
-```env
-DSH_SCI_PROVIDER=tokenfans-codex
-DSH_SCI_BASE_URL=https://tokenfans.ai/codex
-DSH_SCI_MODEL=gpt-6.1-sol
-DSH_SCI_TOKENFANS_API_KEY=your-key
-```
+默认使用 **DeepSeek 官方**，只需要一个 API key：启动后打开 DSH 的 **设置 → 模型**，选择提供商并填入 key 即可，无需编辑任何文件。key 保存在本机 `%APPDATA%\dsh-sci\harness\.credentials.yaml`（明文，请勿外传）。也可以在启动环境里设置 `DEEPSEEK_API_KEY`。
 
-OpenAI 示例：
+如需其他服务，通过 `.env.local` 指定一个兼容 OpenAI Responses 协议（`/responses`）的上游 API。
+
+OpenAI 官方接口：
 
 ```env
 DSH_SCI_PROVIDER=openai
@@ -93,7 +90,7 @@ DSH_SCI_MODEL=gpt-4.1
 DSH_SCI_API_KEY=your-key
 ```
 
-其他兼容接口：
+其他兼容接口（第三方网关、自建代理或本地服务）：
 
 ```env
 DSH_SCI_PROVIDER=custom

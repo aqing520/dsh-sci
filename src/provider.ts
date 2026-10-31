@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { readModelUsage, type ModelRequestAccounting, type ModelUsage } from "./model-usage.js";
 
-export type ProviderKind = "tokenfans-codex" | "openai" | "custom";
+export type ProviderKind = "deepseek" | "tokenfans-codex" | "openai" | "custom";
 
 export interface ProviderConfig {
   provider: ProviderKind;
@@ -47,6 +47,7 @@ export class ProviderError extends Error {
 }
 
 const DEFAULTS: Record<ProviderKind, { baseUrl: string; model: string }> = {
+  deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro" },
   "tokenfans-codex": { baseUrl: "https://tokenfans.ai/codex", model: "gpt-6.1-sol" },
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1" },
   custom: { baseUrl: "http://127.0.0.1:8080/v1", model: "default" },
@@ -57,14 +58,14 @@ function normalizeBaseUrl(value: string): string {
 }
 
 export function providerConfigFromEnvironment(env: Record<string, string | undefined> = process.env): ProviderConfig {
-  const rawProvider = env.DSH_SCI_PROVIDER ?? "tokenfans-codex";
-  const provider: ProviderKind = rawProvider === "openai" || rawProvider === "custom" || rawProvider === "tokenfans-codex" ? rawProvider : "custom";
+  const rawProvider = env.DSH_SCI_PROVIDER ?? "deepseek";
+  const provider: ProviderKind = rawProvider === "deepseek" || rawProvider === "openai" || rawProvider === "custom" || rawProvider === "tokenfans-codex" ? rawProvider : "custom";
   const defaults = DEFAULTS[provider];
   return {
     provider,
     baseUrl: normalizeBaseUrl(env.DSH_SCI_BASE_URL ?? defaults.baseUrl),
     model: env.DSH_SCI_MODEL ?? defaults.model,
-    apiKey: env.DSH_SCI_API_KEY ?? env.DSH_SCI_TOKENFANS_API_KEY ?? env.OPENAI_API_KEY,
+    apiKey: env.DSH_SCI_API_KEY ?? env.DSH_SCI_TOKENFANS_API_KEY ?? env.DEEPSEEK_API_KEY ?? env.OPENAI_API_KEY,
     timeoutMs: Math.max(1000, Number.parseInt(env.DSH_SCI_PROVIDER_TIMEOUT_MS ?? "120000", 10) || 120000),
   };
 }
