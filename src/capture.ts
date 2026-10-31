@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { listWorkspace, type WorkspaceEntry } from "./workspace.js";
@@ -534,7 +534,7 @@ export class CaptureStore {
     const target = path.join(this.root, file); await mkdir(path.dirname(target), { recursive: true }); const temporary = `${target}.${randomUUID()}.tmp`;
     await writeFile(temporary, serializeMetadataJson(value, this.metadataPassphrase), "utf8"); await rename(temporary, target);
   }
-  private async readJson<T>(file: string): Promise<T> { return parseMetadataJson<T>(await readFile(path.join(this.root, file), "utf8"), this.metadataPassphrase); }
+  private async readJson<T>(file: string): Promise<T> { const target = path.join(this.root, file); const info = await stat(target); if (info.size > 32 * 1024 * 1024) { await rm(target, { force: true }); throw Object.assign(new Error("Oversized metadata index reset"), { code: "ENOENT" }); } return parseMetadataJson<T>(await readFile(target, "utf8"), this.metadataPassphrase); }
   private ensureUnlocked(): void { if (this.metadataLocked) throw new MetadataLockedError(this.status.error); }
   private async writeBackupPublications(publications: BackupPublication[]): Promise<void> { await this.writeJson(BACKUP_PUBLICATION_FILE, { schema: "dsh-sci.backup-publication-index.v1", publications: publications.slice(-1000) }); }
   private async rebuildSessionIndex(): Promise<void> {

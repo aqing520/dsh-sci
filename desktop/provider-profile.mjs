@@ -23,7 +23,7 @@ ${models.map((model) => `          - id: ${yamlString(model)}`).join("\n")}`;
 }
 
 /** Apply dsh-sci's marked profile sections while preserving unrelated DSH patch content. */
-export function buildProviderProfilePatch(current, providerConfig, lifecyclePatchUrl, researchPatchUrl) {
+export function buildProviderProfilePatch(current, providerConfig, lifecyclePatchUrl, researchPatchUrl, brandPatchUrl) {
   const identity = providerProfileIdentity(providerConfig.provider);
   const marker = "# dsh-sci: provider-route";
   const defaultsMarker = "# dsh-sci: provider-default";
@@ -54,14 +54,18 @@ ${entries.join("\n")}
     model: ${yamlString(providerConfig.model)}`;
   const lifecycleBlock = `# dsh-sci: lifecycle-plugin\n- insert:\n  - id: dsh-sci-lifecycle\n    name: ${JSON.stringify(lifecyclePatchUrl)}\n# dsh-sci: lifecycle-plugin-end`;
   const researchBlock = researchPatchUrl ? `# dsh-sci: research-plugin\n- insert:\n  - id: dsh-sci-research\n    name: ${JSON.stringify(researchPatchUrl)}\n# dsh-sci: research-plugin-end` : "";
+  // Replace the official DeepSeek sidebar brand with the dsh-sci brand package and default to the light Codex theme.
+  const brandBlock = brandPatchUrl ? `# dsh-sci: brand-plugin\n- id: ui-brand-official\n  disabled: true\n- id: ui-theme\n  name: "@deepseek-ai/dsh-client-ui-theme"\n  config:\n    preference: light\n- insert:\n  - id: dsh-sci-brand\n    name: ${JSON.stringify(brandPatchUrl)}\n# dsh-sci: brand-plugin-end` : "";
   // Legacy marker names from earlier releases are still recognised so old profiles are migrated cleanly.
-  const managedBlockBoundary = "(?=\\n# dsh-sci: (?:tokenfans-search-disabled|tokenfans-default|provider-search-disabled|provider-default|lifecycle-plugin|research-plugin)|$)";
+  const normalizedCurrent = String(current ?? "").replace(/\r\n/g, "\n");
+  const managedBlockBoundary = "(?=\\n# dsh-sci: (?:tokenfans-search-disabled|tokenfans-default|provider-search-disabled|provider-default|lifecycle-plugin|research-plugin|brand-plugin)|$)";
   const routePattern = new RegExp(`# dsh-sci: (?:provider-route|tokenfans-codex)\\n[\\s\\S]*?${managedBlockBoundary}`);
   const searchPattern = new RegExp(`# dsh-sci: (?:tokenfans|provider)-search-disabled\\n[\\s\\S]*?${managedBlockBoundary}`);
   const defaultsPattern = new RegExp(`# dsh-sci: (?:tokenfans|provider)-default\\n[\\s\\S]*?${managedBlockBoundary}`);
+  const brandPattern = /# dsh-sci: brand-plugin\n[\s\S]*?(?:# dsh-sci: brand-plugin-end|$)/;
   const lifecyclePattern = /# dsh-sci: lifecycle-plugin\n[\s\S]*?(?:# dsh-sci: lifecycle-plugin-end|$)/;
   const researchPattern = /# dsh-sci: research-plugin\n[\s\S]*?(?:# dsh-sci: research-plugin-end|$)/;
-  const base = current.replace(routePattern, "").replace(searchPattern, "").replace(defaultsPattern, "").replace(lifecyclePattern, "").replace(researchPattern, "").trim();
-  const sections = [providerPatch.trimEnd(), ...(identity.native ? [] : [searchBlock, defaultsPatch]), lifecycleBlock, ...(researchBlock ? [researchBlock] : [])];
+  const base = normalizedCurrent.replace(routePattern, "").replace(searchPattern, "").replace(defaultsPattern, "").replace(brandPattern, "").replace(lifecyclePattern, "").replace(researchPattern, "").trim();
+  const sections = [providerPatch.trimEnd(), ...(identity.native ? [] : [searchBlock, defaultsPatch]), lifecycleBlock, ...(researchBlock ? [researchBlock] : []), ...(brandBlock ? [brandBlock] : [])];
   return `${base ? `${base}\n\n` : ""}${sections.join("\n\n")}\n`;
 }

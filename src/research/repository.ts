@@ -378,7 +378,7 @@ export class ResearchRepository {
   private async appendEventInternal(event: ResearchEvent): Promise<void> {
     await this.init();
     const file = path.join("projects", segment(event.projectId), "events.jsonl");
-    await mkdir(path.dirname(file), { recursive: true });
+    await mkdir(path.join(this.root, path.dirname(file)), { recursive: true });
     let previous = "";
     try { previous = await this.readText(file); } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     for (const line of previous.split(/\r?\n/u).filter(Boolean)) if (JSON.parse(line).eventId === event.eventId) return;

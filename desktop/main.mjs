@@ -8,6 +8,26 @@ import { createResearchIpcRegistrar, createResearchWindowRegistry } from "./rese
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ownsInstance = app.requestSingleInstanceLock();
 if (!ownsInstance) app.quit();
+app.on("second-instance", () => {
+  if (windowRef && !windowRef.isDestroyed()) {
+    if (windowRef.isMinimized()) windowRef.restore();
+    windowRef.show();
+    windowRef.focus();
+  }
+});
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught exception in main process:", error);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection in main process:", reason);
+});
+
+function defaultDesktopWorkspace() {
+  if (!app.isPackaged) return process.cwd();
+  const dir = path.join(app.getPath("documents"), "dsh-sci-workspace");
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
 let windowRef;
 let harnessProcess;
 let harnessUrl;
@@ -58,20 +78,54 @@ function packagedConfigFile() {
   return fs.existsSync(external) ? external : path.join(here, "..", "config", "dsh-sci.config.json");
 }
 
+function loadingScreenUrl() {
+  const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>dsh-sci</title><style>
+    :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #f6f8fa; color: #0f172a; }
+    body { margin: 0; height: 100vh; display: flex; flex-direction: column; -webkit-app-region: drag; user-select: none; overflow: hidden; }
+    .top { height: 38px; flex: none; }
+    .card { flex: 1; margin: 0 0 0 260px; background: #ffffff; border-radius: 14px 0 0 0; border-top: 1px solid rgba(15, 23, 42, 0.075); border-left: 1px solid rgba(15, 23, 42, 0.075); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
+    .sidebar { position: fixed; top: 38px; left: 0; bottom: 0; width: 260px; padding: 10px 14px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; letter-spacing: -0.02em; padding: 6px; }
+    .mark { width: 22px; height: 22px; border-radius: 6px; background: #0f172a; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+    .spinner { width: 28px; height: 28px; border: 2.5px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.75s linear infinite; }
+    .label { font-size: 14px; font-weight: 500; color: #334155; }
+    .sub { font-size: 12.5px; color: #64748b; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style><body><div class="top"></div><div class="sidebar"><div class="brand"><span class="mark">&#10022;</span><span>dsh-sci</span></div></div><div class="card"><div class="spinner"></div><div class="label">正在启动 dsh-sci 科研工作区…</div><div class="sub">正在初始化本地 DSH 引擎与科研记忆服务</div></div></body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
 function createWindow(url, options = {}) {
-  windowRef = new BrowserWindow({
-    width: 1120,
-    height: 760,
-    minWidth: 860,
-    minHeight: 600,
-    title: "dsh-sci",
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      ...(options.preload ? { preload: options.preload } : {}),
-    },
-  });
+  if (!windowRef || windowRef.isDestroyed()) {
+    windowRef = new BrowserWindow({
+      width: 1180,
+      height: 780,
+      minWidth: 860,
+      minHeight: 600,
+      title: "dsh-sci",
+      backgroundColor: "#f6f8fa",
+      autoHideMenuBar: true,
+      ...(process.platform === "win32"
+        ? {
+            titleBarStyle: "hidden",
+            titleBarOverlay: {
+              color: "#f6f8fa",
+              symbolColor: "#334155",
+              height: 38,
+            },
+          }
+        : {}),
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        preload: options.preload ?? path.join(here, "main-preload.cjs"),
+      },
+    });
+    windowRef.setMenuBarVisibility(false);
+    // The embedded DSH web page sets its own title ("DeepSeek Harness"); keep the dsh-sci title.
+    windowRef.on("page-title-updated", (event) => event.preventDefault());
+  }
   if (url) {
     windowRef.loadURL(url);
   }
@@ -136,6 +190,30 @@ function installCaptureIpc() {
     researchWindows.requireWindow(event);
   };
   const researchIpc = createResearchIpcRegistrar(ipcMain, researchWindows, { auditDenied: (record) => researchRepository?.appendSecurityAudit(record) });
+  ipcMain.handle("desktop:open-research-workspace", async (_event, access) => {
+    await openResearchDashboard(access === "read-only" ? "read-only" : "owner");
+    return { opened: true };
+  });
+  ipcMain.handle("desktop:open-capture-history", async () => {
+    await openCaptureDashboard();
+    return { opened: true };
+  });
+  ipcMain.handle("desktop:queue-metadata-backup", async () => {
+    await publishLocalMetadataBackup();
+    return { queued: true };
+  });
+  ipcMain.handle("desktop:set-titlebar-theme", (_event, scheme) => {
+    if (!windowRef || windowRef.isDestroyed() || typeof windowRef.setTitleBarOverlay !== "function") return false;
+    const dark = scheme === "dark";
+    try {
+      windowRef.setTitleBarOverlay({
+        color: dark ? "#111318" : "#f6f8fa",
+        symbolColor: dark ? "#cbd5e1" : "#334155",
+        height: 38,
+      });
+    } catch {}
+    return true;
+  });
   ipcMain.handle("capture:update-settings", async (event, input) => {
     assertCaptureWindow(event);
     if (!captureStore) throw new Error("Capture store is not ready");
@@ -299,7 +377,7 @@ function installCaptureIpc() {
       projectId,
       sdkHome: path.join(app.getPath("userData"), "research-sdk"),
       pluginFile: path.join(here, "dsh-sci-research-plugin.mjs"),
-      cwd: app.isPackaged ? app.getPath("documents") : process.cwd(),
+      cwd: defaultDesktopWorkspace(),
       provider: researchAgentProviderConfig.provider,
       model: researchAgentProviderConfig.model,
       baseUrl: researchAgentProviderConfig.baseUrl,
@@ -407,6 +485,16 @@ function bundledHarnessInvocation() {
   return script ? { command: process.execPath, argsPrefix: [script], environment: { ELECTRON_RUN_AS_NODE: "1" } } : undefined;
 }
 
+/** Copy a directory using APIs that also work inside app.asar (fs.cpSync does not). */
+function copyDirectory(source, target) {
+  fs.mkdirSync(target, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const from = path.join(source, entry.name);
+    const to = path.join(target, entry.name);
+    if (entry.isDirectory()) copyDirectory(from, to); else fs.copyFileSync(from, to);
+  }
+}
+
 function ensureProviderProfile(home, providerConfig) {
   const patchFile = path.join(home, "profiles", "web", "cordis.patch.yml");
   fs.mkdirSync(path.dirname(patchFile), { recursive: true });
@@ -416,15 +504,19 @@ function ensureProviderProfile(home, providerConfig) {
   fs.mkdirSync(path.dirname(lifecycleFile), { recursive: true });
   fs.copyFileSync(path.join(here, "dsh-sci-lifecycle-plugin.mjs"), lifecycleFile);
   fs.copyFileSync(path.join(here, "dsh-sci-research-plugin.mjs"), researchFile);
+  const brandDir = path.join(home, "plugins", "dsh-sci-brand");
+  fs.rmSync(brandDir, { recursive: true, force: true });
+  copyDirectory(path.join(here, "brand"), brandDir);
+  const brandPatch = pathToFileURL(path.join(brandDir, "lib", "index.js")).href;
   const lifecyclePatch = pathToFileURL(lifecycleFile).href;
   const researchPatch = pathToFileURL(researchFile).href;
-  fs.writeFileSync(patchFile, buildProviderProfilePatch(current, providerConfig, lifecyclePatch, researchPatch), "utf8");
+  fs.writeFileSync(patchFile, buildProviderProfilePatch(current, providerConfig, lifecyclePatch, researchPatch, brandPatch), "utf8");
 }
 
 async function startOfficialHarness() {
   const { startHarness } = await import("../dist/src/harness.js");
   const home = path.join(app.getPath("userData"), "harness");
-  const workspace = app.isPackaged ? app.getPath("documents") : process.cwd();
+  const workspace = defaultDesktopWorkspace();
   runtimeSettingsFile = path.join(app.getPath("userData"), "runtime-settings.json");
   const { loadRuntimeSettings, runtimeSettingsToEnvironment } = await import("../dist/src/runtime-settings.js");
   runtimeSettings = await loadRuntimeSettings(runtimeSettingsFile);
@@ -523,7 +615,7 @@ async function startOfficialHarness() {
   backupQueueTimer = setInterval(() => void backupQueue?.process().catch((error) => console.warn("Backup queue processing failed:", error)), 60_000);
   backupQueueTimer.unref();
   captureMonitor = new WorkspaceCaptureMonitor(captureStore, workspace, 15_000, { provider: providerConfig.provider, model: providerConfig.model });
-  await captureMonitor.start();
+  void captureMonitor.start().catch((error) => console.warn("Initial workspace capture failed:", error));
   const result = await startHarness({
     home,
     cwd: workspace,
@@ -554,11 +646,12 @@ app.whenReady().then(async () => {
   if (!ownsInstance) return;
   markStartupStarted();
   installStartupIpc();
+  installApplicationMenu();
+  createWindow(loadingScreenUrl());
   try {
     await verifyOptionalIntegrity();
     const url = await startOfficialHarness();
     installCaptureIpc();
-    installApplicationMenu();
     createWindow(url);
   } catch (error) {
     console.error("Official dsh Harness could not start:", error);

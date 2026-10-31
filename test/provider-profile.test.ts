@@ -35,3 +35,13 @@ test("default DeepSeek profile keeps the native route and offers TokenFans as a 
   assert.doesNotMatch(first, /llm-deepseek/);
   assert.doesNotMatch(first, /agent-default-model/);
 });
+
+test("provider profile patch replaces the official brand with the dsh-sci brand idempotently", () => {
+  const config = { provider: "deepseek", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro" };
+  const args = [config, "file:///tmp/lifecycle.mjs", "file:///tmp/research.mjs", "file:///tmp/brand/lib/index.js"] as const;
+  const first = buildProviderProfilePatch("", ...args);
+  assert.equal(buildProviderProfilePatch(first, ...args), first);
+  assert.match(first, /- id: ui-brand-official\r?\n  disabled: true/);
+  assert.match(first, /id: dsh-sci-brand/);
+  assert.equal((first.match(/# dsh-sci: brand-plugin-end/g) ?? []).length, 1);
+});
