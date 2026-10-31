@@ -13,10 +13,42 @@
     "desktop": "npm run build && electron .",
     "desktop:dev": "npm run desktop",
     "dist:win": "npm run build && electron-builder --win nsis",
-    "dsh:web": "node node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open"
+    "dsh:web": "node node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open",
+    "integrity:manifest": "npm run build && node scripts/generate-integrity.mjs",
+    "package:smoke": "npm run build && node scripts/package-smoke.mjs",
+    "research:harness:smoke": "npm run build && node scripts/research-harness-smoke.mjs",
+    "research:guard:smoke": "npm run build && node scripts/research-harness-smoke.mjs --guard && node scripts/research-harness-smoke.mjs --guard-ptc",
+    "research:sdk:smoke": "npm run build && node scripts/research-sdk-smoke.mjs",
+    "research:provider:smoke": "npm run build && node scripts/research-provider-smoke.mjs",
+    "research:workspace:smoke": "npm run build && electron --no-sandbox --disable-gpu scripts/research-workspace-smoke.cjs",
+    "research:access:smoke": "npm run build && electron --no-sandbox --disable-gpu scripts/research-access-smoke.cjs",
+    "research:store:migrate": "npm run build && node scripts/research-store-migrate.mjs",
+    "research:app-crash:smoke": "npm run build && node scripts/research-app-crash-smoke.mjs",
+    "research:case:check": "node scripts/research-case-check.mjs",
+    "research:case:live": "npm run build && node scripts/research-case-live.mjs",
+    "research:case:resume": "npm run build && node scripts/research-case-resume.mjs",
+    "research:case:prepare-resume": "npm run build && node scripts/research-case-prepare-resume.mjs",
+    "research:case:commit-offline-plan": "npm run build && node scripts/research-case-commit-offline-plan.mjs",
+    "research:case:budget-extension": "npm run build && node scripts/research-case-authorized-budget-extension.mjs",
+    "research:case:wall-clock-restart": "npm run build && node scripts/research-case-authorized-wall-clock-restart.mjs",
+    "research:case:review": "npm run build && node scripts/research-case-review-packet.mjs",
+    "research:case:workspace": "npm run build && electron --no-sandbox --disable-gpu scripts/research-case-workspace.cjs",
+    "research:case:workspace:smoke": "npm run build && electron --no-sandbox --disable-gpu scripts/research-case-workspace-smoke.cjs",
+    "research:code:live": "npm run build && node scripts/research-code-live.mjs",
+    "research:case:replay": "npm run build && node scripts/research-case-replay.mjs",
+    "research:source:live": "npm run build && node scripts/research-source-live.mjs",
+    "research:reading-retry:live": "npm run build && node scripts/research-reading-retry-live.mjs",
+    "research:code-review:live": "npm run build && node scripts/research-code-review-live.mjs",
+    "research:code-review:workspace:smoke": "npm run build && electron --no-sandbox --disable-gpu scripts/research-code-review-workspace-smoke.cjs",
+    "release:audit": "node scripts/release-audit.mjs",
+    "release:preflight": "node scripts/release-preflight.mjs",
+    "recovery:audit": "npm run build && node scripts/recovery-audit.mjs",
+    "recovery:restore": "npm run build && node scripts/recovery-restore.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.2.1-rc.2"
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sdk-protocol": "^0.2.1-rc.2",
+    "pdfjs-dist": "^6.3.289"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
@@ -43,7 +75,12 @@
       "!node_modules/electron-builder{,/**}",
       "!node_modules/typescript{,/**}",
       "!node_modules/tsx{,/**}",
-      "!node_modules/@types{,/**}"
+      "!node_modules/@types{,/**}",
+      "!**/.env.local",
+      "!dsh-sci.config.json",
+      "!config{,/**}",
+      "!research{,/**}",
+      "!desktop/capture-preload.mjs"
     ],
     "directories": {
       "output": "release"
