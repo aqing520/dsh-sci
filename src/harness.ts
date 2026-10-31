@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { spawnOwnedProcess } from "./owned-process.js";
 
 export interface HarnessLaunchOptions {
   home: string;
@@ -9,6 +10,8 @@ export interface HarnessLaunchOptions {
   environment?: Record<string, string | undefined>;
   version?: string;
   startupTimeoutMs?: number;
+  /** Optional fixed web port; 0 asks the OS for an available port. */
+  webPort?: number;
 }
 
 export interface HarnessLaunchResult {
@@ -34,22 +37,10 @@ export function resolveHarnessCommand(command = process.env.DSH_SCI_HARNESS_BIN)
   return { command: "dsh", argsPrefix: [] };
 }
 
-async function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const onSpawn = () => { cleanup(); resolve(); };
-    const onError = (error: Error) => { cleanup(); reject(error); };
-    const cleanup = () => { child.off("spawn", onSpawn); child.off("error", onError); };
-    child.once("spawn", onSpawn);
-    child.once("error", onError);
-  });
-}
-
 function spawnDsh(options: HarnessLaunchOptions, command: string, args: string[]): ChildProcessWithoutNullStreams {
-  return spawn(command, args, {
+  return spawnOwnedProcess(command, args, {
     cwd: options.cwd,
     env: { ...process.env, ...options.environment, DSH_HOME: options.home },
-    stdio: "pipe",
-    windowsHide: true,
     shell: process.platform === "win32" && command.toLowerCase().endsWith(".cmd"),
   });
 }
@@ -85,9 +76,15 @@ async function waitForUrl(child: ChildProcessWithoutNullStreams, timeoutMs: numb
       rejectUrl(new Error(`dsh exited before startup (code=${String(code)}, signal=${String(signal)})${detail ? `\n${detail}` : ""}`));
     }
   };
+  const onError = (error: Error) => {
+    if (!settled) rejectUrl(error);
+  };
   child.stdout.on("data", onStdout);
   child.stderr.on("data", onStderr);
   child.once("exit", onExit);
+  // Attach before waiting for the spawn event. On Windows the Harness can
+  // print its URL immediately after spawn; waiting first can lose that line.
+  child.once("error", onError);
 
   const timer = setTimeout(() => {
     const detail = diagnosticMessage();
@@ -102,6 +99,7 @@ async function waitForUrl(child: ChildProcessWithoutNullStreams, timeoutMs: numb
     child.stdout.off("data", onStdout);
     child.stderr.off("data", onStderr);
     child.off("exit", onExit);
+    child.off("error", onError);
     // Keep draining the pipes after startup. The Harness emits diagnostic
     // output while serving requests; leaving these pipes paused can eventually
     // fill the OS buffer and stall the child process.
@@ -114,17 +112,18 @@ async function waitForUrl(child: ChildProcessWithoutNullStreams, timeoutMs: numb
 export async function startHarness(options: HarnessLaunchOptions): Promise<HarnessLaunchResult> {
   const resolved = resolveHarnessCommand(options.command);
   const version = options.version ?? DEFAULT_VERSION;
-  const args = [...(options.argsPrefix ?? resolved.argsPrefix), "web", "--no-open"];
-  let child: ChildProcessWithoutNullStreams;
+  const args = [...(options.argsPrefix ?? resolved.argsPrefix), "web", "--no-open", ...(options.webPort === undefined ? [] : ["--port", String(options.webPort)])];
+  let child!: ChildProcessWithoutNullStreams;
   try {
     child = spawnDsh(options, resolved.command, args);
-    await waitForSpawn(child);
+    const url = await waitForUrl(child, options.startupTimeoutMs ?? DEFAULT_TIMEOUT_MS);
+    return { url, command: resolved.command, args, process: child };
   } catch (error) {
+    child?.kill();
     if (options.command) throw error;
     const fallbackCommand = process.platform === "win32" ? "npx.cmd" : "npx";
     const fallbackArgs = ["--yes", `@deepseek-ai/dsh@${version}`, ...args];
     child = spawnDsh(options, fallbackCommand, fallbackArgs);
-    await waitForSpawn(child);
     try {
       const url = await waitForUrl(child, options.startupTimeoutMs ?? DEFAULT_TIMEOUT_MS);
       return { url, command: fallbackCommand, args: fallbackArgs, process: child };

@@ -13,3 +13,28 @@ research/rewind-analysis*.json
 research/rewind-plugin-analysis*.json
 research/rewind-analysis-local/
 research/rewind-*-paths.json
+research/validation/cases/**/runtime/
+
+# Generated validation runs, snapshots and operator scratch bundles. Keep
+# benchmark definitions and source documentation under version control, but do
+# not commit replay logs, screenshots, SDK session homes or one-off test cases.
+research/validation/*-live-*/
+research/validation/*-tests-*/
+research/validation/*-smoke-*/
+research/validation/cases/**/snapshot.json
+research/validation/cases/**/trace.json
+research/validation/cases/**/quality-check.json
+research/validation/cases/**/review-packet-*/
+research/validation/cases/**/material-revision-*/
+research/validation/cases/**/budget-extension-*/
+research/validation/cases/**/recovery-extension-*/
+research/validation/cases/**/offline-*/
+research/validation/cases/**/workspace-*/
+research/validation/cases/**/behavior-run-*/
+research/validation/candidate-*/
+research/validation/approved-*-test-*.mjs
+research/validation/*-tests-*.txt
+
+# Validation transcripts and one-off case fixtures are local evidence, not
+# source code. Commit benchmark definitions and docs instead of this archive.
+research/validation/

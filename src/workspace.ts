@@ -9,7 +9,18 @@ export interface WorkspaceEntry {
   sha256?: string;
 }
 
-const ignored = new Set([".git", "node_modules", ".dsh-sci", "dist"]);
+// Generated package output can contain Electron asar archives. Inside an
+// Electron process those archives are virtual filesystems, so treating them
+// as ordinary workspace files can produce false ENOENT errors while hashing.
+const ignored = new Set([".git", "node_modules", ".dsh-sci", "dist", "release"]);
+
+function isSensitiveFile(name: string): boolean {
+  return name === ".env" || name.startsWith(".env.") || name === "dsh-sci.config.json" || /(^|[-_.])(credentials?|secrets?|private-key)([-_.]|$)/iu.test(name) || /\.(pem|key|p12|pfx|crt)$/iu.test(name);
+}
+
+function isGeneratedArchive(name: string): boolean {
+  return /\.(asar|blockmap)$/iu.test(name);
+}
 
 export async function listWorkspace(root: string, depth = 12): Promise<WorkspaceEntry[]> {
   const base = path.resolve(root);
@@ -20,6 +31,7 @@ export async function listWorkspace(root: string, depth = 12): Promise<Workspace
   async function visit(directory: string, level: number): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (ignored.has(entry.name)) continue;
+      if (entry.isFile() && (isSensitiveFile(entry.name) || isGeneratedArchive(entry.name))) continue;
       const full = path.join(directory, entry.name);
       const rel = path.relative(base, full) || ".";
       if (entry.isDirectory()) {
