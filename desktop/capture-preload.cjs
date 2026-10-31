@@ -1,0 +1,26 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("captureApi", {
+  updateSettings: (settings) => ipcRenderer.invoke("capture:update-settings", settings),
+  runtimeSettings: (settings) => ipcRenderer.invoke("runtime:settings", settings),
+  cleanup: () => ipcRenderer.invoke("capture:cleanup"),
+  recoveryAudit: () => ipcRenderer.invoke("capture:recovery-audit"),
+  chooseAuditBundle: () => ipcRenderer.invoke("capture:choose-audit-bundle"),
+  chooseRestoreTarget: () => ipcRenderer.invoke("capture:choose-restore-target"),
+  restoreBundle: (input) => ipcRenderer.invoke("capture:restore-bundle", input),
+  refresh: () => ipcRenderer.invoke("capture:refresh"),
+  search: (query) => ipcRenderer.invoke("service:search", query),
+  quota: () => ipcRenderer.invoke("service:quota"),
+  localSearch: (query) => ipcRenderer.invoke("capture:search-local", query),
+  retryBackup: (jobId) => ipcRenderer.invoke("capture:retry-backup", jobId),
+  researchList: (limit) => ipcRenderer.invoke("research:list", limit),
+  researchCreate: (input) => ipcRenderer.invoke("research:create", input),
+  researchActivate: (projectId) => ipcRenderer.invoke("research:activate", projectId),
+  researchStartNext: (projectId) => ipcRenderer.invoke("research:start-next", projectId),
+  researchApprove: (input) => ipcRenderer.invoke("research:approve", input),
+  researchComplete: (input) => ipcRenderer.invoke("research:complete", input),
+  researchFail: (input) => ipcRenderer.invoke("research:fail", input),
+  researchPause: (projectId) => ipcRenderer.invoke("research:pause", projectId),
+  researchResume: (projectId) => ipcRenderer.invoke("research:resume", projectId),
+  researchExport: (projectId) => ipcRenderer.invoke("research:export", projectId),
+});
