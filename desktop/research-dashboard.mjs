@@ -121,6 +121,15 @@ function researchDashboardClient() {
     const reference = node("input"); reference.name = "reference"; reference.required = true; reference.placeholder = "DOI、arXiv 或网页 URL";
     const acquire = node("button", "获取指定文献"); acquire.type = "submit"; referenceForm.append(reference, acquire); panel.append(referenceForm);
     referenceForm.onsubmit = async (event) => { event.preventDefault(); acquire.disabled = true; try { await api.resolveReference({ projectId, reference: reference.value }); await renderSources(card); } catch (value) { error(value); } finally { acquire.disabled = false; } };
+    const localDocForm = node("form", undefined, "local-doc-form");
+    const localPath = node("input"); localPath.name = "file"; localPath.placeholder = "本地文献文件或文件夹路径（支持 PDF、MD、TXT、TeX、HTML、JSON、CSV）"; localPath.style.minWidth = "340px";
+    const importPathBtn = node("button", "按路径导入"); importPathBtn.type = "submit";
+    const pickFileBtn = node("button", "选择本地文献文件…", "primary"); pickFileBtn.type = "button";
+    const pickDirBtn = node("button", "导入整个文献文件夹…"); pickDirBtn.type = "button";
+    localDocForm.append(localPath, importPathBtn, pickFileBtn, pickDirBtn); panel.append(localDocForm);
+    localDocForm.onsubmit = async (event) => { event.preventDefault(); if (!localPath.value.trim()) return; importPathBtn.disabled = true; notice.hidden = true; try { const res = await api.ingestDocument({ projectId, file: localPath.value.trim() }); if (res?.errors?.length) error("部分文件导入失败：" + res.errors.join("；")); await renderSources(card); } catch (value) { error(value); } finally { importPathBtn.disabled = false; } };
+    pickFileBtn.onclick = async () => { pickFileBtn.disabled = true; notice.hidden = true; try { const res = await api.ingestDocument({ projectId, pick: "file" }); if (!res?.canceled) { if (res?.errors?.length) error("部分文件导入失败：" + res.errors.join("；")); await renderSources(card); } } catch (value) { error(value); } finally { pickFileBtn.disabled = false; } };
+    pickDirBtn.onclick = async () => { pickDirBtn.disabled = true; notice.hidden = true; try { const res = await api.ingestDocument({ projectId, pick: "directory" }); if (!res?.canceled) { if (res?.errors?.length) error("部分文件导入失败：" + res.errors.join("；")); await renderSources(card); } } catch (value) { error(value); } finally { pickDirBtn.disabled = false; } };
     const relationPanel = node("section", undefined, "source-relations");
     relationPanel.append(node("h4", "来源关系与独立性"), node("p", "预印本、正式版、修正版和复现实验必须由人工明确关系；默认不把同一工作计为独立证据。"));
     const relationForm = node("form", undefined, "source-relation-form");
@@ -327,7 +336,7 @@ function researchDashboardClient() {
   document.getElementById("load-approvals").onclick = () => renderApprovals().catch(error);
   document.getElementById("approval-project").onchange = () => renderApprovals().catch(error);
   document.getElementById("approval-task").oninput = () => renderApprovals().catch(error);
-  document.getElementById("create").onclick = async () => { const question = document.getElementById("question").value.trim(); if (!question) return; try { await api.create({ question }); await load(); } catch (value) { error(value); } };
+  document.getElementById("create").onclick = async () => { const question = document.getElementById("question").value.trim(); if (!question) return; const button = document.getElementById("create"); button.disabled = true; notice.hidden = true; try { await api.create({ question }); await load(); } catch (value) { error(value); } finally { button.disabled = false; } };
   const memoryForm = document.getElementById("memory-search-form");
   const rebuild = node("button", "重建所选项目记忆索引"); rebuild.type = "button"; rebuild.id = "memory-index-rebuild";
   const indexStatus = node("p"); indexStatus.id = "memory-index-status"; indexStatus.setAttribute("role", "status");

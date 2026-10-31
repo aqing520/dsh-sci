@@ -161,6 +161,7 @@ async function researchDashboardUrl(event) {
   const projects = await researchRepository.listProjects(100);
   const url = `data:text/html;charset=utf-8,${encodeURIComponent(renderResearchDashboard({ projects, readOnly: researchWindows.access(event) === "read-only" }))}`;
   researchWindows.permitDocument(event.sender, url);
+  setTimeout(() => { if (!event.sender.isDestroyed() && event.sender.getURL() !== url) void event.sender.loadURL(url).catch(() => undefined); }, 30);
   return url;
 }
 
@@ -267,7 +268,9 @@ function installCaptureIpc() {
   ipcMain.handle("capture:refresh", async (event) => {
     assertCaptureWindow(event);
     if (!captureStore) throw new Error("Capture store is not ready");
-    return captureDashboardUrl();
+    const url = await captureDashboardUrl();
+    setTimeout(() => { if (!event.sender.isDestroyed() && event.sender.getURL() !== url) void event.sender.loadURL(url).catch(() => undefined); }, 30);
+    return url;
   });
   ipcMain.handle("service:search", async (event, query) => {
     assertCaptureWindow(event);
@@ -338,7 +341,57 @@ function installCaptureIpc() {
   researchIpc.handle("research:add-citation", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.addCitation(String(input?.projectId), String(input?.sourceId), input ?? {}); });
   researchIpc.handle("research:add-claim", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.addClaim(String(input?.projectId), input ?? {}); });
   researchIpc.handle("research:add-evidence", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.addEvidence(String(input?.projectId), input ?? {}); });
-  researchIpc.handle("research:ingest-document", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.ingestDocument(String(input?.projectId), String(input?.file)); });
+  researchIpc.handle("research:ingest-document", async (event, input) => {
+    assertResearchWindow(event);
+    if (!researchOrchestrator) throw new Error("Research orchestrator is not ready");
+    const projectId = String(input?.projectId ?? "");
+    const supportedExt = new Set([".pdf", ".md", ".markdown", ".txt", ".text", ".tex", ".html", ".htm", ".json", ".csv", ".tsv"]);
+    const collectFiles = async (targetPath) => {
+      const resolved = path.resolve(targetPath);
+      const info = await fs.promises.stat(resolved);
+      if (info.isFile()) return [resolved];
+      if (!info.isDirectory()) return [];
+      const found = [];
+      const entries = await fs.promises.readdir(resolved, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && supportedExt.has(path.extname(entry.name).toLowerCase())) {
+          found.push(path.join(resolved, entry.name));
+        }
+      }
+      return found;
+    };
+    if (input?.pick === "file" || input?.pick === "directory") {
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      const picked = await dialog.showOpenDialog(ownerWindow, input.pick === "directory"
+        ? { properties: ["openDirectory", "dontAddToRecent"] }
+        : { properties: ["openFile", "multiSelections", "dontAddToRecent"], filters: [{ name: "科研文献与文档", extensions: ["pdf", "md", "markdown", "txt", "text", "tex", "html", "htm", "json", "csv", "tsv"] }] });
+      if (picked.canceled || !picked.filePaths.length) return { canceled: true, ingested: 0, sources: [] };
+      const files = (await Promise.all(picked.filePaths.map(collectFiles))).flat();
+      const sources = [];
+      const errors = [];
+      for (const file of files) {
+        try { sources.push((await researchOrchestrator.ingestDocument(projectId, file)).source); }
+        catch (err) { errors.push(`${path.basename(file)}: ${err?.message ?? String(err)}`); }
+      }
+      return { canceled: false, ingested: sources.length, sources, errors };
+    }
+    const rawFile = String(input?.file ?? "").trim();
+    if (!rawFile) throw new Error("Document path is required");
+    const resolved = path.resolve(rawFile);
+    const info = await fs.promises.stat(resolved).catch(() => undefined);
+    if (info?.isDirectory()) {
+      const files = await collectFiles(resolved);
+      if (!files.length) throw new Error("该文件夹下没有找到支持的文献文件（.pdf, .md, .txt, .tex, .html, .json, .csv, .tsv）");
+      const sources = [];
+      const errors = [];
+      for (const file of files) {
+        try { sources.push((await researchOrchestrator.ingestDocument(projectId, file)).source); }
+        catch (err) { errors.push(`${path.basename(file)}: ${err?.message ?? String(err)}`); }
+      }
+      return { ingested: sources.length, sources, errors };
+    }
+    return researchOrchestrator.ingestDocument(projectId, rawFile);
+  });
   researchIpc.handle("research:reference", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.resolveReference(String(input?.projectId), String(input?.reference)); });
   researchIpc.handle("research:relate-sources", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.relateSources(String(input?.projectId), { fromSourceId: String(input?.fromSourceId), toSourceId: String(input?.toSourceId), kind: input?.kind, countsAsIndependent: input?.countsAsIndependent, note: String(input?.note ?? "") }); });
   researchIpc.handle("research:source-read", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.readSource(String(input?.projectId), { sourceId: String(input?.sourceId), contentVersionId: input?.contentVersionId, offset: input?.offset, limit: input?.limit }, "workspace"); });
@@ -428,6 +481,10 @@ async function createStartupErrorWindow(error) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
   startupErrorWindow = undefined;
+  if (windowRef && !windowRef.isDestroyed()) {
+    windowRef.destroy();
+    windowRef = undefined;
+  }
   createWindow(undefined, { preload: path.join(here, "startup-preload.cjs") });
   startupErrorWindow = windowRef;
   const recovery = previousStartupWasUnclean ? "检测到上次启动未正常退出，可以先重启应用；本地捕获记录会保留。" : "";
@@ -646,12 +703,12 @@ app.whenReady().then(async () => {
   if (!ownsInstance) return;
   markStartupStarted();
   installStartupIpc();
-  installApplicationMenu();
   createWindow(loadingScreenUrl());
   try {
     await verifyOptionalIntegrity();
     const url = await startOfficialHarness();
     installCaptureIpc();
+    installApplicationMenu();
     createWindow(url);
   } catch (error) {
     console.error("Official dsh Harness could not start:", error);
