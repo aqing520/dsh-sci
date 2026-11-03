@@ -10,11 +10,12 @@ export interface ResearchTaskContract {
 }
 
 const outputs: Record<ResearchTaskKind, ResearchOutputKind[]> = {
-  clarify: [], custom: [], research: ["source", "citation"], "source-review": ["source", "citation"],
+  clarify: [], custom: [], conversation: [], research: ["source", "citation"], "source-review": ["source", "citation"],
   hypothesis: ["hypothesis"], "experiment-design": ["experiment-proposal"], "code-preparation": ["code-bundle"], "code-review": ["code-review"], experiment: ["completed-run"], evaluate: ["evaluation"], report: ["report"]
 };
 const common = ["context", "inspect", "source-read", "chunk-read", "report-read", "memory-search", "memory-conflicts"];
 const actions: Record<ResearchTaskKind, string[]> = {
+  conversation: ["source", "reference", "citation", "claim", "evidence", "document", "search", "hypothesis", "design", "code-stage", "code-read", "code-review", "experiment", "artifact", "evaluation", "evaluate", "report", "memory"],
   clarify: ["claim", "memory"],
   research: ["source", "reference", "source-read", "chunk-read", "citation", "claim", "evidence", "document", "search", "memory"],
   "source-review": ["source", "reference", "source-read", "chunk-read", "citation", "claim", "evidence", "document", "search", "memory"],

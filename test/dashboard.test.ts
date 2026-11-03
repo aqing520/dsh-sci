@@ -5,6 +5,16 @@ import { renderCaptureDashboard } from "../desktop/capture-dashboard.mjs";
 // @ts-expect-error dashboard module is intentionally plain ESM JavaScript.
 import { renderResearchDashboard } from "../desktop/research-dashboard.mjs";
 
+test("native research rows offer evidence review without an independent runner or manual task controls", () => {
+  const project = { projectId: "native-project", title: "Native research", question: "A question", status: "researching", iteration: 0, mode: "conversation" };
+  const native = renderResearchDashboard({ projects: [project] });
+  const legacy = renderResearchDashboard({ projects: [{ ...project, mode: undefined }] });
+  assert.match(native, /在原对话中继续研究/);
+  assert.match(native, /data-action="sources"/);
+  assert.doesNotMatch(native, /data-action="(?:run-agent|activate|start|approve|complete)"/);
+  assert.match(legacy, /data-action="run-agent"/);
+});
+
 test("capture dashboard escapes local metadata", () => {
   const html = renderCaptureDashboard({ status: { state: "capturing", workspaceRoot: "<workspace>" }, settings: { enabled: true, maxSnapshots: 20, maxResearchRecords: 30, retentionDays: 7 }, records: [{ runId: "run-123456789012", createdAt: "2026-10-28T00:00:00Z", sessionId: "s1", status: "partial", execution: { provider: "custom", model: "mock" }, outputs: { changedFiles: 0 }, workspaceSnapshotId: "snapshot-123456789012" }], snapshots: [], sessions: [{ sessionId: "s1", status: "active", eventCount: 2, toolAttribution: "partial", observedPaths: ["a.txt"] }], sessionEvents: { s1: [{ type: "tool/result", safe: true }] }, backupPublications: [{ createdAt: "2026-10-28T00:00:00Z", status: "failed", manifestId: "manifest-123", provider: "remote", error: "offline" }], queueItems: [{ jobId: "job-123456789", createdAt: "2026-10-28T00:00:00Z", state: "retrying", attempts: 1, maxAttempts: 3, nextAttemptAt: "2026-10-28T00:01:00Z", lastError: "offline" }] });
   assert.match(html, /&lt;workspace&gt;/);

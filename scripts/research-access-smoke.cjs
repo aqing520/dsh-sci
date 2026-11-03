@@ -11,7 +11,21 @@ const projectRoot = path.resolve(__dirname, "..");
 let temp, passed = false;
 const result = { schema: "dsh-sci.research-access-smoke.v1", startedAt: new Date().toISOString(), platform: process.platform, scientificQuality: "not-reviewed; synthetic access fixture", stage: "startup" };
 const outputIndex = process.argv.indexOf("--out"), outputPath = outputIndex >= 0 ? path.resolve(process.argv[outputIndex + 1]) : undefined;
+let currentStage = result.stage;
+Object.defineProperty(result, "stage", { enumerable: true, get: () => currentStage, set(value) {
+  currentStage = value;
+  if (outputPath) require("node:fs").writeFileSync(`${outputPath}.progress.json`, JSON.stringify(result, null, 2) + "\n");
+} });
 const deadline = Date.now() + 90_000;
+// A renderer/IPC promise can remain pending without returning to waitFor.
+// Bound the entire isolated test, not only its polling loops.
+const runDeadline = setTimeout(() => {
+  Object.assign(result, { ok: false, failure: `Desktop access smoke exceeded its deadline during ${result.stage}`, diagnosticsDirectory: temp, finishedAt: new Date().toISOString() });
+  passed = false; process.exitCode = 1;
+  if (outputPath) require("node:fs").writeFileSync(outputPath, JSON.stringify(result, null, 2) + "\n");
+  app.quit();
+  setTimeout(() => app.exit(1), 20_000).unref();
+}, 90_000);
 async function waitFor(operation) { while (Date.now() < deadline) { const value = await operation(); if (value) return value; await delay(50); } throw new Error(`Production Research Workspace access smoke timed out during ${result.stage}`); }
 
 (async () => {
@@ -117,10 +131,11 @@ async function waitFor(operation) { while (Date.now() < deadline) { const value 
     save(); app.exit(1);
   }, 20_000);
   app.once("will-quit", () => {
+    clearTimeout(runDeadline);
     clearTimeout(shutdownTimer);
-    Object.assign(result, { ok:passed, normalShutdown:true, finishedAt:new Date().toISOString() });
+    Object.assign(result, { ok:passed && !result.failure, normalShutdown:true, finishedAt:new Date().toISOString() });
     save();
-    process.exitCode = passed ? 0 : 1;
+    process.exitCode = passed && !result.failure ? 0 : 1;
     // Leave the isolated profile for diagnostics; files can remain locked until Electron exits.
   });
   app.quit();

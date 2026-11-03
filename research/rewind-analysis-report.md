@@ -1,76 +1,109 @@
-# Rewind 本地逆向调研记录
+# Rewind 本机逆向与 dsh-sci 底层能力对照
 
-> 本记录基于本机 Rewind 安装目录和解包样本的静态分析，仅提炼可复现的架构事实；没有把 Rewind 私有源码、插件或资源复制到 dsh-sci。
+更新：2026-11-03（Asia/Singapore）。dsh-sci 基线：`98b7063`，版本 `0.2.2`。
 
-## 分析对象
+下文差距针对改造前基线；后续实现进展见[主对话科研实现与验证](../docs/research-conversation.md)。
 
-- Rewind Electron 外壳：`research/rewind-inspect`
-- Rewind 安装时的 Harness 扩展：`C:\Users\wzy\AppData\Local\Programs\Rewind\resources\harness-update-base\plugin`
-- 分析工具：本地 `morluto/rea` 6.8.0
-- 精确入口分析结果：`research/rewind-analysis.json`
+本轮问题：Rewind 如何把能力装进原有 DSH Agent；哪些做法能帮助 dsh-sci 在当前对话中完成科研，而不要求用户另开科研工作区。
 
-REA 对 15 个外壳入口文件的结果：5 个 BrowserWindow、92 个 IPC 操作、38 个主进程 handler、11 个 contextBridge API、3 个 renderer 入口；主 bundle 没有解析失败。完整依赖目录有 13,354 个文件，已避免把第三方依赖作为主结论。
+## 结论
 
-## 架构
+当前 dsh-sci 已有不少科研内核代码，主要问题是它们没有形成主 Agent 连续可用的能力。新增独立页面无法解决模型、凭据、session、workspace 和执行生命周期的割裂。
 
-```text
-Electron main process
-  ├─ 启动校验、更新、崩溃恢复、托盘和窗口
-  ├─ 生成/维护 DSH profile patch
-  ├─ 启动 dsh-desktop-host 子进程
-  └─ 通过 dsh-app://app 加载隔离的 DSH Web UI
-        └─ Rewind Harness plugin
-             ├─ Rewind API 身份和短期 model grant
-             ├─ Rewind LLM adapter
-             ├─ Rewind web search provider
-             ├─ 后台 workspace/session capture
-             ├─ quota provider
-             └─ 原生升级/备份支持
-```
+Rewind 值得借鉴的是同一 Harness 中的插件、服务和生命周期集成。它不是科研能力的验证样本，不能据此推断其具备文献评价、科学推理或实验有效性。
 
-外壳的 BrowserWindow 使用 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true` 和自定义 `dsh-app:` 协议。主界面通过 preload 暴露窄 API，IPC handler 检查 sender/frame；Platform 账户页使用独立 session partition，并只允许目标 origin 导航。
+建议目标：用户留在原对话，Agent 按问题调用检索、正文阅读、证据、设计、实验和记忆工具；内核保存状态并校验事实。证据面板和审阅页面作为按需查看的辅助入口。见[主 Agent 科研能力方案](../docs/research-native-agent-direction.md)。
 
-## Rewind 做的事情
+## 对象与边界
 
-1. **远端模型代理**：profile 将默认 provider 改为 `rewind`，禁用官方 DeepSeek provider。插件从 DSH credential store 读取 Key，换取短期授权，再转发 OpenAI Responses 流式请求；授权会续期，Key 变化会使旧 grant 失效。
-2. **后台捕获**：监听 DSH session/agent 事件和 workspace 变化，把会话事件、文件观察、附件、快照和运行记录异步写入本地 stateRoot。捕获是后台观察，源码明确标注不能证明精确的工具文件归属或科学有效性。
-3. **远端备份/发布**：捕获结果按项目生成 manifest 和对象，支持 trace、git、附件、Harbor 记录等对象的分块上传，并在服务端确认 manifest 后记录已发布状态。失败会重试，运行中的任务会让发布让步。
-4. **Web search**：注册独立 `rewind` 搜索 provider，通过模型授权调用服务端搜索并返回引用来源。
-5. **额度**：提供 `rewindQuotaProvider`，回合结束后刷新额度；GUI 插入额度 UI。
-6. **产品策略**：保留设置和模型选择的必要部分，默认关闭 schedule、agent preset、plan、goal、trajectory 等 UI；关闭默认 workspace，更新入口指向 `https://apiwharf.com/downloads`。
-7. **更新和恢复**：基础安装有 manifest/hash 校验；feature update 使用签名 envelope、白名单路径和原子替换；启动时验证版本，另有 mandatory update、startup error、crash report 和“禁用第三方插件后重启”的恢复路径。
+- 官方工具：[morluto/rea](https://github.com/morluto/rea)，使用官方 npm 包 `rea-agents@6.8.0` CLI。
+- 工具目录：`C:/Users/wzy/.codex/tools/rea-research`；未改 Codex MCP 配置或产品依赖清单。
+- 分析 Node：工具目录中的 `24.22.1`；默认 Node `24.15.0` 不满足本次 REA 的 engine 范围。
+- Rewind 安装目录：`C:/Users/wzy/AppData/Local/Programs/Rewind`。
+- 外壳：`resources/app.asar`，`rewind-harness@1.0.7`。
+- 活跃插件：`resources/harness-update-base/plugin`，`@windong/rewind-harness-plugin@1.0.7`。
+- 仅分析发布文件；未启动 Rewind、未读账户/凭据/聊天记录、未调用其服务、未执行样本代码。
+- 不把 Rewind 私有源码或资源提交到产品。本报告的行为解释为重新表述。
 
-## 与当前 dsh-sci 的差异
+原始证据保存在 Git 忽略目录：
 
-当前 dsh-sci 已经采用 Electron → 独立 DSH Web/Harness 子进程 → loopback URL 的主架构，也已接入 TokenFans provider。与 Rewind 相比，尚缺少：
+| 本地文件 | 内容 |
+| --- | --- |
+| `research/rewind-analysis-local/2026-11-03/identity.json` | 版本、所选路径、逐文件 SHA-256 |
+| `research/rewind-analysis-local/2026-11-03/plugin-summary.json` | REA 插件摘要、覆盖率和限制 |
+| `research/rewind-analysis-local/2026-11-03/plugin-evidence.json` | 插件完整 Evidence bundle |
+| `research/rewind-analysis-local/2026-11-03-shell/identity.json` | 外壳所选路径及 SHA-256 |
+| `research/rewind-analysis-local/2026-11-03-shell/shell-summary.json` | REA 外壳超时结果，内含 details.partial_observation 完整部分证据；不是精简摘要 |
+| `research/rewind-analysis-local/evidence-index.json` | 本轮从原始结果提取的紧凑索引与覆盖率 |
 
-- DSH 插件形式的会话/工作区后台捕获；当前 `src/capture.ts` 只保存简单 JSONL 和文件列表快照。
-- 稳定的本地 capture store、会话归属、增量文件观察和附件索引。
-- 后端无关的 provider adapter 生命周期（短期 grant、凭据失效、流式代理错误分类）。
-- 额度 provider、引用型 Web search 和 workspace/session history UI。
-- 签名更新、版本清单、启动完整性检查和崩溃恢复。
-- Rewind 那种有意裁剪/重排 DSH UI 的产品策略。
+插件 parent Evidence：`ev_b549a86ec70b09f6e19301852d13f19bd931acae4f9d375c14f1899f7413ef3c`。目录身份 SHA-256：`19561893c01331f7723478dc4f4ac47b7f28bf6e1c3946e2cbdebd91c3f81451`。
 
-## 建议迁移顺序
+插件选取 `package.json`、`lib/index.js`、`lib/native-worker.cjs`、`lib/first-upgrade.cjs`。REA 报告 3 个 JS 文件完成语法解析、0 个解析失败，另有 14 个库存文件未选中。语义图触及每文件 20,000 节点上限，属于 partial，不能宣称完整恢复所有调用链；下表还逐段核对了 bundle 中对应函数。
 
-### 第一阶段：本地记录能力
+外壳选取自有 JSON、JS/CJS、HTML，排除第三方依赖。第一次含 CSS 的调用被参数校验拒绝，随后按命令支持的文件集合纠正并单独重跑外壳，没有重复分析成功的插件。
 
-在 dsh-sci 自己的命名空间实现 `capture` 插件：监听 session events，追加原子 JSONL，按 workspace 维护文件 hash/revision，生成 session index、workspace snapshot 和附件索引。先不上传、不绑定任何第三方服务。
+外壳在 lib/welcome/welcome.js 触及 REA 每源文件 300,000ms deadline，返回 provider_timeout，已保留部分 Evidence，未再次计算相同文件。部分 Evidence ID：`ev_b29e3d8b602c8b3cd73fce9ddfc5c06dd8af1e037d641b43e9700eaa2c5b8b75`；ASAR SHA-256：`fca9535421869391b262730b6583737edd3c116d929f5a7a9ed2386eed37d589`。已解析 7 个 JS、跳过 4 个，语法失败 0；不能把它当成整个外壳已分析完成。lib/main.js 和已完成的 preload 观察仍被保留；外壳行为结论另外核对了发布文本。
 
-### 第二阶段：可替换的服务接口
+所有观察都是静态证据：注册语句不等于运行时可达。本轮未验证服务端实现、实际上传内容、交互外观、真实性能或恢复成功率。
 
-抽象 `ModelGateway`、`SearchProvider`、`QuotaProvider` 和 `BackupPublisher`，默认实现使用 TokenFans/自有后端；凭据继续走 DSH credential store，API key 不写 profile patch。服务端 API 只接受显式配置，避免把 Rewind 的 APIWharf 地址硬编码进 dsh-sci。
+## Rewind 如何集成能力
 
-### 第三阶段：产品 UI
+下表 `S` 指 ASAR 的 `lib/main.js`，`P` 指活跃插件的 `lib/index.js`；行号仅适用于本轮 identity 中的文件。
 
-增加历史会话检索、workspace 快照、捕获状态、导出和额度卡片。通过 DSH plugin patch 插入，避免 fork 官方 DSH Web UI。
+| 问题 | 静态观察及位置 | 可借鉴之处 |
+| --- | --- | --- |
+| 接入 Agent | P:8174 注入 llm/credentials/sessions/agents；P:8337–8435 安装对话策略、搜索、capture、quota 和模型 adapter。 | 能力作为当前 Harness 的插件服务和工具，不要求另开一个可见 Agent。 |
+| 配置一致性 | P:2357–2453 解析凭据并管理授权；P:8406–8416 注册 adapter，凭据引用更新时使相关缓存失效。S:13352–13423 生成不含 key 的 profile。 | 复用当前模型与凭据引用，在调用边界解析。短期 grant 是其自有后端需求，并非我们必须实现的功能。 |
+| 原对话搜索 | S:13377 附近设置 web.searchProvider；P:8349–8355 向已有 web 服务注册搜索 provider。 | 把搜索接到原 Agent 工具链，而不只提供一个页面 API。 |
+| 工作归属 | P:7978–8170 有 workspace 发现和 workspace/opened 处理；P:8418–8428 订阅 session/agent，并在 turn/end 刷新 quota。 | 上下文、捕获和实验目录按 session/workspace 绑定，状态随对话更新。 |
+| 长任务 | P:7368–7483 在请求前计量上下文，限定压缩和恢复次数，并检查压缩是否有效。 | 运行时预算、进展判断与恢复同样属于能力；不只是加一段 system prompt。不要照搬其模型参数。 |
+| 后台资源 | P:8203–8217 有 checkpoint、分批发现、CPU work/pause、frame、watcher 和重扫参数。 | 后台记录要控制资源；配置存在不能证明真实不卡顿。应先测量再决定是否增加 watcher。 |
+| 产品外壳 | S:13248–13335 用插件 ID 调整显示策略；S:17297–17335 用协议和 sender 检查衔接外壳和 Harness。 | 学插件边界；不能因为它隐藏计划 UI 就移除科研需要的计划和进度。 |
 
-### 第四阶段：发布可靠性
+## dsh-sci 的实际断点
 
-再加入 manifest/hash、签名更新、原子发布和恢复报告。Rewind 的更新协议可以作为设计参考，但不应复制其私有协议或密钥。
+### P1：默认聊天与自动科研不是同一条执行链
 
-## 结论边界
+`desktop/main.mjs:369` 明确拒绝官方 DeepSeek 自动科研，`:546` 不为它创建模型规划器。科研 SDK profile 使用 openai-responses（`src/research/dsh-sdk.ts:180`），预算代理转发 /responses（`src/research/model-budget-proxy.ts:68`）。
 
-- 能确认的是 Electron/DSH/plugin 的静态边界、配置、事件监听、文件 schema 名称和网络调用形状。
-- 不能仅凭静态分析确认服务端实现、真实上传内容、运行时可达性、服务器权限或完整 UI 路由。
-- `app.asar` 与 `harness-update-base/plugin` 是两个不同层次；只分析 app.asar 会漏掉 Rewind 的核心 capture/backup/plugin 逻辑。
+默认安装能聊天不代表独立页面里的自动科研可用。这是确定的源码分支。不能只删 guard；应让当前会话通过 DSH adapter 使用科研工具，并在统一请求边界接入预算。
+
+### P1：聊天设置与科研配置脱节
+
+聊天 profile 的 apiKeyEnv 通过 DSH credential store/环境解析（`desktop/provider-profile.mjs:18,38`）；科研 provider/key 在主进程启动时从环境和配置加载并缓存（`desktop/main.mjs:533–546`）。SDK 使用独立 home（`:378`），缺 key 直接失败（`src/research/dsh-sdk.ts:386`）。
+
+因此在模型设置填 key、切模型，不会同步这套启动时配置。应共享 DSH 的 provider/凭据引用和能力状态，不要求重复配置或复制明文凭据文件。
+
+### P1：工作区归属没有完整跟随会话
+
+`desktop/main.mjs:519` 固定默认 workspace；实验策略（`:592`）、15 秒快照（`:617`）和科研 cwd（`:380`）使用它。lifecycle 虽记录 session.header.cwd（`desktop/dsh-sci-lifecycle-plugin.mjs:235`），事件归属仍从全局 workspace-index.json 获取（`:118–122,240–244`）。
+
+推断：切到另一个聊天目录后，聊天、捕获和科研执行目录可能不一致；本轮未做切换复现。应先建立 session→workspace→research project 绑定。
+
+### P1：工具已进主对话，上下文和完成协议仍围绕外部 runner
+
+并非“完全没接入”：`desktop/dsh-sci-research-plugin.mjs:86–108` 已注册 research_context/research_record_event/research_action，`:117–138` 有 system prompt hook。
+
+断点：普通对话的 context tool 只读内存绑定；绑定又 fallback 到全局 active-context.json（`:79,91,113,147–148`）。自动研究记忆注入只在 external runner 分支执行（`:123–126`）。完成提示强调 task result schema 和 Workspace 审批（`:133–135`），外部 SDK 再要求 JSON 收据（`src/research/dsh-sdk.ts:246–249`）。
+
+注册一个万能 JSON action 工具还不足以让当前聊天自然科研。需要可靠的 session 绑定、按需上下文、工具契约和内核收据；用户读自然语言解释。
+
+### P2：页面按钮承担了工作流
+
+`desktop/research-dashboard.mjs:370–372` 统一输出整套按钮，`:365` 主要展示执行结果 JSON。`desktop/main.mjs:134–156` 分别打开捕获和科研窗口。用户被要求操作内部状态机。
+
+用户已明确底层能力是目标；优先级应改成原会话内完成科研。已有审阅功能保留为辅助入口，不需要先删内核或重画全部界面。
+
+## 纠正旧记录
+
+生命周期捕获、文件 hash/快照差异、artifact 索引、本地历史检索、备份队列、启动诊断、完整性校验、正文/引用/证据、设计/代码绑定、实验、评估、记忆和恢复均已有实现。
+
+旧报告中的“只有简单 JSONL”“缺少 capture 插件”已过时。签名自动更新和部署可靠性仍有差距，但不应排在科研主链路之前。普通网页搜索、Crossref 书目发现、正文获取是不同能力，不能混称。
+
+## 完成范围
+
+- 已回答：安装身份、外壳/插件边界、Harness 集成模式、当前源码断点及主对话迁移方向。
+- 部分回答：长任务和后台资源策略，只有静态实现证据。
+- 未覆盖：服务端、Rewind 科学能力、真实交互体验、端到端科研质量、实际 workspace 切换复现。
+- 交付复现脚本：`scripts/research-rewind-inspect.mjs`；原始输出留在 Git 忽略目录。
+- 本轮只改调研资料和复现脚本，未改产品运行逻辑；方案不代表已经实现。

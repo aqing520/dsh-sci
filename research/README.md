@@ -1,16 +1,18 @@
 # 本地调研资料
 
-项目内的两个目录是 Windows Junction，用于在开发时直接访问本机调研资料：
+本轮调研与开发方向：
 
-- `rea/`：本机 `morluto/rea` 源码，用于 JavaScript/Electron 静态分析和运行时观察。
-- `rewind-inspect/`：之前解包的 Rewind Harness `app.asar` 内容，用于架构和功能调研。
+- [Rewind 本机逆向与当前代码对照](rewind-analysis-report.md)
+- [在主 Agent 中实现科研能力](../docs/research-native-agent-direction.md)
 
-它们不会进入 dsh-sci 的 Git 提交或安装包。REA 保留自己的 `.git` 历史；Rewind 目录只作为本地样本。
+旧记录中的 `rea/`、`rewind-inspect/` Junction 在本次检查时已不存在。现在直接分析安装包和活跃 Harness 插件，原始证据在被 Git 忽略的 `rewind-analysis-local/`。不要把样本源码或 Evidence bundle 加入提交或发布包。
 
-REA 示例命令（在 `dsh-sci` 根目录执行）：
+复现命令（项目根目录，需已有官方 REA 和兼容 Node）：
 
 ```powershell
-node research/rea/scripts/rea.mjs analyze-javascript-application research/rewind-inspect --json
+node scripts/research-rewind-inspect.mjs `
+  --rea 'C:\Users\wzy\.codex\tools\rea-research\node_modules\rea-agents\scripts\rea.mjs' `
+  --node 'C:\Users\wzy\.codex\tools\rea-research\node_modules\node-win-x64\bin\node.exe'
 ```
 
-如果以后要迁移机器，只需重新创建这两个 Junction；不要把 Rewind 解包内容复制进发布安装包。
+可用 --installation 指定安装目录，--output 指定新输出目录，--scope shell|plugin|all 选择范围。脚本拒绝覆盖旧证据，不启动 Rewind，不读用户凭据或聊天数据，不注册 MCP 或安装工具。

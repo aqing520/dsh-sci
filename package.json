@@ -17,6 +17,7 @@
     "integrity:manifest": "npm run build && node scripts/generate-integrity.mjs",
     "package:smoke": "npm run build && node scripts/package-smoke.mjs",
     "research:harness:smoke": "npm run build && node scripts/research-harness-smoke.mjs",
+    "research:conversation:smoke": "npm run build && node scripts/research-conversation-smoke.mjs",
     "research:guard:smoke": "npm run build && node scripts/research-harness-smoke.mjs --guard && node scripts/research-harness-smoke.mjs --guard-ptc",
     "research:sdk:smoke": "npm run build && node scripts/research-sdk-smoke.mjs",
     "research:provider:smoke": "npm run build && node scripts/research-provider-smoke.mjs",
@@ -54,6 +55,8 @@
     "@types/node": "^26.6.5",
     "electron": "44.7.0",
     "electron-builder": "^26.15.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   },

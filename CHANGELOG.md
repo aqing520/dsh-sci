@@ -7,6 +7,11 @@
 
 ## Unreleased
 
+- Added native research tools to the existing DSH Agent: session/workspace-bound research, document reading receipts, exact citations, hypotheses, designs, code, approvals, experiments, evaluations, memory and checkpoints. Native replies stay ordinary prose and use the current DSH adapter rather than a second SDK runner.
+- Meter native Agent requests and settle usage before turn completion; preserve unknown usage, enforce budgets and stop repeated no-progress loops. Add model-free research status, budget, pause/resume, new-project and legacy-adoption commands.
+- Preserve legacy research evidence, plan history and budget limits during explicit conversation migration. Keep old experiment approvals bound to their original plan. Store per-workspace capture indexes and compare each snapshot against the same workspace after switching or restarting.
+- Add a real DSH conversation-loop smoke with synthetic local documents/provider and Harness restart recovery. This verifies integration, not scientific quality or live-provider performance.
+
 - Make Windows experiment memory sampling tolerate slow CIM queries by serializing samples, using a bounded five-second query timeout, and recording enforcement only after a successful sample. Tighten offline case recovery so failed terminal projects are inspectable while frozen iteration limits still reject an invalid third plan.
 
 - Allow the DSH research runner to bind its persisted SDK session identity to a plan version, so re-planning cannot resume a stale session from the superseded plan. The default project-scoped identity remains backward compatible.

@@ -5,6 +5,23 @@ import os from "node:os";
 import path from "node:path";
 import { CaptureStore } from "../src/capture.js";
 
+test("workspace snapshot differences remain local when alternating projects and restarting", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dsh-sci-multi-capture-"));
+  const a = path.join(root, "a"), b = path.join(root, "b"), state = path.join(root, "state");
+  try {
+    await mkdir(a); await mkdir(b);
+    await writeFile(path.join(a, "a.txt"), "one");
+    await writeFile(path.join(b, "b.txt"), "other");
+    const store = new CaptureStore(state);
+    await store.snapshot(a); await store.snapshot(b);
+    const revisit = await store.snapshot(a);
+    assert.deepEqual(revisit.changes, { added: [], removed: [], changed: [] });
+    await writeFile(path.join(b, "b.txt"), "updated");
+    const afterRestart = await new CaptureStore(state).snapshot(b);
+    assert.deepEqual(afterRestart.changes, { added: [], removed: [], changed: ["b.txt"] });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("capture store writes an atomic snapshot and reports file changes", async () => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "dsh-sci-workspace-"));
   const state = await mkdtemp(path.join(os.tmpdir(), "dsh-sci-capture-"));

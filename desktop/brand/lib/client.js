@@ -7,6 +7,65 @@ window.__ModuleLoader__.load({
 		const { jsx, jsxs } = require("react/jsx-runtime");
 
 		const CODEX_STYLE_ID = "dsh-sci-codex-theme";
+		const RESEARCH_TITLES = {
+			research_begin: "研究问题", research_context: "研究进度", research_search: "查找文献",
+			research_read: "阅读正文", research_cite: "原文引用", research_claim: "研究主张",
+			research_evidence: "证据关系", research_hypothesis: "可检验假设", research_design: "实验设计",
+			research_code: "代码与输入", research_experiment: "实验提案", research_execute: "实验结果",
+			research_approve_design: "设计审批", research_budget: "研究额度", research_analyze: "结果分析",
+			research_report: "研究报告", research_artifact: "保存产物", research_inspect: "查看研究记录",
+			research_memory: "研究记忆", research_checkpoint: "保存进度", research_action: "研究操作"
+		};
+		const evidenceId = (id) => typeof id === "string" && /^[A-Za-z0-9._:-]{1,160}$/.test(id) ? `dsh-sci-evidence-${id}` : undefined;
+		function revealEvidence(id) {
+			const element = typeof document === "undefined" ? undefined : document.getElementById(id);
+			if (!element) return false;
+			for (let parent = element; parent; parent = parent.parentElement) if (parent.tagName === "DETAILS") parent.open = true;
+			element.scrollIntoView({ behavior: "smooth", block: "center" });
+			element.focus?.({ preventScroll: true });
+			return true;
+		}
+		function EvidenceRef({ id }) {
+			const target = evidenceId(id);
+			return target ? jsx("a", { href: `#${target}`, onClick: (event) => { event.preventDefault(); revealEvidence(target); }, children: id }) : jsx("span", { children: String(id) });
+		}
+		function savedText(label, text, id) {
+			return jsxs("section", { id: evidenceId(id), tabIndex: -1, className: "dsh-sci-evidence-section", children: [jsx("div", { className: "dsh-sci-evidence-label", children: label }), jsx("pre", { children: String(text ?? "") })] }, id ?? label);
+		}
+		function ResearchToolView({ toolName, block, phase, inspect }) {
+			let value;
+			const raw = (block.content ?? []).filter((item) => item.type === "text").map((item) => item.text).join("\n");
+			try { value = JSON.parse(raw); } catch { /* Errors and older text-only receipts remain readable. */ }
+			const title = RESEARCH_TITLES[toolName] ?? toolName;
+			const rows = [];
+			if (value && typeof value === "object") {
+				if (value.content?.contentVersionId) rows.push(savedText("保存的正文版本 · 阅读部分不等于读完整篇", `${value.content.sourceId}\n${value.content.contentVersionId}\nSHA-256: ${value.content.contentHash}\n范围：${value.content.scope ?? "unknown"}${value.content.truncated ? "（提取结果截断）" : ""}`, value.content.contentVersionId));
+				for (const chunk of value.chunks ?? []) rows.push(savedText(`正文片段 ${chunk.chunkId}${chunk.page ? ` · 第 ${chunk.page} 页` : ""}`, chunk.text, chunk.chunkId));
+				if (value.nextOffset !== undefined && value.nextOffset !== null) rows.push(jsx("p", { children: `仍有后续内容，下一片段偏移：${value.nextOffset}` }, "next"));
+				if (value.quotedText !== undefined) {
+					rows.push(savedText(`原文引句 · ${value.verification?.status === "verbatim-match" ? "已匹配保存正文；支持关系仍需判断" : "请检查核验状态"}`, value.quotedText, value.citationId));
+					if (value.locator?.chunkId) rows.push(jsxs("p", { children: ["定位到正文：", jsx(EvidenceRef, { id: value.locator.chunkId })] }, "locator"));
+					rows.push(savedText("来源与版本", `${value.sourceId}\n${value.contentVersionId ?? ""}`));
+				}
+				if (value.claimId && value.text) rows.push(savedText(`主张 · ${value.claimType ?? "未分类"} · ${value.confidence ?? "未评级"}`, value.text, value.claimId));
+				for (const id of value.citationIds ?? []) rows.push(jsx(EvidenceRef, { id }, id));
+				if (value.relation) rows.push(savedText(`证据关系 · ${{ supports: "支持", refutes: "反驳", qualifies: "限定", context: "背景" }[value.relation] ?? value.relation}`, value.rationale, value.evidenceId));
+				for (const id of [value.citationId && !value.quotedText ? value.citationId : undefined, value.experimentRef, value.artifactRef].filter(Boolean)) rows.push(jsx(EvidenceRef, { id }, id));
+				if (toolName === "research_checkpoint") rows.push(savedText("进度摘要 · 不等于科学结论验收", value.checkpoint?.summary ?? value.summary, value.checkpoint?.checkpointId));
+				const run = value.run ?? (value.runId ? value : undefined);
+				if (run) {
+					rows.push(savedText(`运行记录 · ${run.state ?? "已保存"}${value.reused ? " · 复用已有结果，未重跑" : ""}`, JSON.stringify(run, null, 2), run.runId));
+				}
+				if (value.summary && toolName !== "research_checkpoint") rows.push(savedText("摘要", value.summary, value.evaluationId));
+				if (value.artifactId) rows.push(savedText("产物与哈希", JSON.stringify(value, null, 2), value.artifactId));
+			}
+			return jsxs("details", { className: `dsh-sci-evidence-card${block.isError ? " dsh-sci-evidence-error" : ""}`, children: [
+				jsx("summary", { children: `${title} · ${phase === "result" ? block.isError ? "失败" : "已记录" : "处理中"}` }, "heading"),
+				...rows,
+				jsxs("details", { children: [jsx("summary", { children: "完整记录" }), jsx("pre", { children: value ? JSON.stringify(value, null, 2) : raw || "正在等待工具结果。" })] }, "raw"),
+				inspect ? jsx("button", { type: "button", onClick: inspect, children: "查看调用过程" }, "inspect") : null
+			] });
+		}
 
 		const CODEX_THEME_TOKENS = {
 			"--dsw-alias-bg-base": { light: "#ffffff", dark: "#161920" },
@@ -59,6 +118,14 @@ window.__ModuleLoader__.load({
   --dsw-radius-panel: 22px;
   --dsh-windows-titlebar-height: 38px;
 }
+.dsh-sci-evidence-card { margin: 6px 0; padding: 9px 12px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; color: var(--dsw-alias-label-primary); font-size: 13px; }
+.dsh-sci-evidence-card summary { cursor: pointer; line-height: 1.7; }
+.dsh-sci-evidence-card pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.65; margin: 6px 0 12px; max-height: 420px; overflow: auto; }
+.dsh-sci-evidence-card a { color: var(--dsw-alias-state-business-primary); display: inline-block; margin-right: 10px; overflow-wrap: anywhere; }
+.dsh-sci-evidence-label { color: var(--dsw-alias-label-secondary); margin-top: 10px; }
+.dsh-sci-evidence-section:focus { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 3px; }
+.dsh-sci-evidence-error { border-color: #b45309; }
+[data-approval-scroll] { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Codex-like Windows frame & rounded white center card */
 html[data-windows-titlebar] .pI_x6G_frame {
@@ -334,8 +401,8 @@ html body:not([data-ds-dark-theme]) .uV2eYG_card:focus-within {
 						type: "button",
 						className: "dsh-sci-titlebar-btn",
 						onClick: () => window.dshSciDesktop?.openResearchWorkspace?.("owner"),
-						title: "打开 dsh-sci 科研工作区 (Research Workspace)",
-						children: "科研工作区"
+						title: "按需审阅研究证据、实验设计和报告；可直接在当前对话开展研究",
+						children: "研究记录"
 					}),
 					jsx("button", {
 						type: "button",
@@ -352,6 +419,19 @@ html body:not([data-ds-dark-theme]) .uV2eYG_card:focus-within {
 		function apply(ctx) {
 			installCodexStyles(ctx);
 			installCodexThemeTokens(ctx);
+			ctx.slots.inject("tool.call.toolview", function* () {
+				for (const key of Object.keys(RESEARCH_TITLES)) yield ctx.slots.register({ name: "tool.call.toolview", key }, ResearchToolView);
+			});
+			// Fragment links only reveal evidence already projected in this conversation.
+			// They cannot read other projects, create reading receipts, or execute actions.
+			ctx.effect(() => {
+				const onClick = (event) => {
+					const href = event.target?.closest?.("a")?.getAttribute("href");
+					if (typeof href === "string" && /^#dsh-sci-evidence-[A-Za-z0-9._:-]{1,160}$/.test(href) && revealEvidence(href.slice(1))) { event.preventDefault(); event.stopPropagation(); }
+				};
+				document.addEventListener("click", onClick, true);
+				return () => document.removeEventListener("click", onClick, true);
+			}, "dsh-sci: local evidence links");
 			ctx.slots.inject("sidebar.brand.mark", () => ctx.slots.inject("sidebar.brand.name", function* () {
 				yield ctx.slots.register({ name: "sidebar.brand.mark" }, BrandMark);
 				yield ctx.slots.register({ name: "sidebar.brand.name" }, BrandName);

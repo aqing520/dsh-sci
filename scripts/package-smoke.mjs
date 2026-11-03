@@ -42,6 +42,7 @@ const required = [
   "dist/src/research/design-review.js",
   "dist/src/research/report-review.js",
   "dist/src/research/budget.js",
+  "dist/src/research/conversation.js",
   "desktop/main.mjs",
   "desktop/capture-dashboard.mjs",
   "desktop/capture-preload.cjs",

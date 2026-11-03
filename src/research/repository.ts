@@ -54,6 +54,14 @@ function segment(value: string): string {
 }
 
 export interface ResearchRepositoryOptions { metadataPassphrase?: string; /** Trusted offline migrator only; never exposed through bridge/IPC. */ migrationId?: string; }
+export interface ResearchConversationBinding {
+  schema: "dsh-sci.research-conversation.v1";
+  sessionId: string;
+  workspaceRoot: string;
+  projectId: string;
+  updatedAt: string;
+  checkpoint?: { summary: string; refs: string[]; at: string };
+}
 export type ResearchApprovalItem =
   | { kind: "task"; project: ResearchProject; plan: ResearchPlan; task: ResearchTask }
   | { kind: "experiment"; project: ResearchProject; task?: ResearchTask; experiment: ExperimentDefinition };
@@ -72,6 +80,20 @@ export class ResearchRepository {
 
   async saveProject(project: ResearchProject): Promise<void> { await this.writeJson(path.join("projects", segment(project.projectId), "project.json"), project); await this.updateIndex(project); }
   async readProject(projectId: string): Promise<ResearchProject | undefined> { return this.readOptionalJson<ResearchProject>(path.join("projects", segment(projectId), "project.json")); }
+  async readConversationBinding(key: string): Promise<ResearchConversationBinding | undefined> {
+    if (!/^[a-f0-9]{64}$/u.test(key)) throw new Error("Invalid research conversation key");
+    return this.readOptionalJson<ResearchConversationBinding>(path.join("conversations", `${key}.json`));
+  }
+  async saveConversationBinding(key: string, binding: ResearchConversationBinding): Promise<void> {
+    if (!/^[a-f0-9]{64}$/u.test(key)) throw new Error("Invalid research conversation key");
+    await this.writeJson(path.join("conversations", `${key}.json`), binding);
+  }
+  async readConversationCheckpoint(projectId: string): Promise<ResearchConversationBinding["checkpoint"]> {
+    return this.readOptionalJson<NonNullable<ResearchConversationBinding["checkpoint"]>>(path.join("projects", segment(projectId), "conversation-checkpoint.json"));
+  }
+  async saveConversationCheckpoint(projectId: string, checkpoint: NonNullable<ResearchConversationBinding["checkpoint"]>): Promise<void> {
+    await this.writeJson(path.join("projects", segment(projectId), "conversation-checkpoint.json"), checkpoint);
+  }
   async readBudget(projectId: string): Promise<ResearchBudget | undefined> {
     const budget = await this.readOptionalJson<unknown>(path.join("projects", segment(projectId), "budget.json"));
     return budget === undefined ? undefined : validateResearchBudget(budget, projectId);

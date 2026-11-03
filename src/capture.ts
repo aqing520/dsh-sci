@@ -174,8 +174,6 @@ export class CaptureStore {
   readonly metadataPassphrase?: string;
   private status: CaptureStatus = { schema: "dsh-sci.capture-status.v1", state: "idle", enabled: true };
   private settings: CaptureSettings = { schema: "dsh-sci.capture-settings.v1", enabled: true, maxSnapshots: 500, maxResearchRecords: 1000 };
-  private previous = new Map<string, { sha256?: string; bytes: number; kind: string }>();
-  private previousWorkspaceRoot?: string;
   private initialized = false;
   private metadataLocked = false;
   private mutationTail: Promise<void> = Promise.resolve();
@@ -206,11 +204,6 @@ export class CaptureStore {
     this.settings.maxResearchRecords = Math.max(1, Math.floor(this.settings.maxResearchRecords || 1000));
     if (typeof this.settings.retentionDays === "number" && Number.isFinite(this.settings.retentionDays) && this.settings.retentionDays > 0) this.settings.retentionDays = Math.min(36_500, Math.floor(this.settings.retentionDays));
     else delete this.settings.retentionDays;
-    try {
-      const index = await this.readJson<{ workspaceRoot?: string; files?: WorkspaceEntry[] }>(INDEX_FILE);
-      this.previousWorkspaceRoot = index.workspaceRoot;
-      this.previous = new Map((index.files ?? []).map((file) => [file.path, { sha256: file.sha256, bytes: file.bytes, kind: file.kind }]));
-    } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     try { this.status = { ...this.status, ...await this.readJson<CaptureStatus>(STATUS_FILE) }; }
     catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     this.status.enabled = this.settings.enabled;
@@ -267,25 +260,26 @@ export class CaptureStore {
     this.ensureUnlocked();
     if (!this.settings.enabled) { this.status = { ...this.status, state: "disabled", enabled: false }; await this.writeJson(STATUS_FILE, this.status); const existing = await this.readIndex(); if (existing) return existing; throw new Error("Capture is disabled"); }
     const resolvedRoot = path.resolve(workspaceRoot);
-    if (this.previousWorkspaceRoot && this.previousWorkspaceRoot !== resolvedRoot) this.previous.clear();
+    const history = await this.listSnapshots(10000);
+    const prior = history.filter((item) => item.workspaceRoot === resolvedRoot).sort((a, b) => b.sequence - a.sequence)[0];
+    const previous = new Map((prior?.files ?? []).map((file) => [file.path, file]));
     const files = await listWorkspace(resolvedRoot, 12);
     const current = new Map(files.map((file) => [file.path, { sha256: file.sha256, bytes: file.bytes, kind: file.kind }]));
-    const added = [...current.keys()].filter((key) => !this.previous.has(key));
-    const removed = [...this.previous.keys()].filter((key) => !current.has(key));
+    const added = [...current.keys()].filter((key) => !previous.has(key));
+    const removed = [...previous.keys()].filter((key) => !current.has(key));
     const changed = [...current.keys()].filter((key) => {
-      const before = this.previous.get(key); const after = current.get(key);
+      const before = previous.get(key); const after = current.get(key);
       return before !== undefined && after !== undefined && (before.bytes !== after.bytes || before.sha256 !== after.sha256 || before.kind !== after.kind);
     });
     const capturedAt = new Date().toISOString();
     const snapshotId = createHash("sha256").update(JSON.stringify({ files, workspaceRoot: resolvedRoot })).digest("hex");
-    const history = await this.listSnapshots(10000);
-    const prior = history.filter((item) => item.workspaceRoot === resolvedRoot).sort((a, b) => b.sequence - a.sequence)[0];
     const sequence = (prior?.sequence ?? 0) + 1;
     const value: WorkspaceSnapshot = { schema: "dsh-sci.workspace-snapshot.v1", snapshotId, workspaceRoot: resolvedRoot, projectId: projectIdFor(resolvedRoot), sequence, capturedAt, files, changes: { added, removed, changed } };
     await this.writeJson(path.join("snapshots", `${snapshotId}.json`), value);
     await this.writeJson(INDEX_FILE, { schema: "dsh-sci.workspace-index.v1", latest: snapshotId, capturedAt, workspaceRoot: resolvedRoot, projectId: value.projectId, sequence, files });
+    const workspaceKey = createHash("sha256").update(process.platform === "win32" ? resolvedRoot.toLowerCase() : resolvedRoot).digest("hex");
+    await this.writeJson(path.join("workspaces", workspaceKey, "index.json"), { schema: "dsh-sci.workspace-index.v1", latest: snapshotId, capturedAt, workspaceRoot: resolvedRoot, projectId: value.projectId, sequence, files });
     await this.writeJson(SNAPSHOT_INDEX_FILE, { schema: "dsh-sci.workspace-snapshot-index.v1", snapshots: [...history.filter((item) => item.snapshotId !== snapshotId), value].sort((a, b) => a.capturedAt.localeCompare(b.capturedAt)).slice(-this.settings.maxSnapshots) });
-    this.previous = current; this.previousWorkspaceRoot = resolvedRoot;
     this.status = { ...this.status, state: "capturing", enabled: true, workspaceRoot: resolvedRoot, projectId: value.projectId, lastSnapshot: snapshotId, lastCapturedAt: capturedAt, error: undefined };
     await this.writeJson(STATUS_FILE, this.status);
     await this.writeResearchRecord(value, options);

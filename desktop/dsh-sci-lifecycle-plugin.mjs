@@ -115,13 +115,24 @@ function sessionDirectory(root, sessionId) {
   const safe = encoded === "." ? "%2E" : encoded === ".." ? "%2E%2E" : encoded;
   return path.join(root, "sessions", safe);
 }
-function workspaceMetadata(root) {
+function workspaceMetadata(root, session) {
+  if (typeof session?.header?.cwd !== "string" || !path.isAbsolute(session.header.cwd)) return {};
+  const workspaceRoot = path.resolve(session.header.cwd);
+  const normalized = (value) => process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
+  const workspaceKey = createHash("sha256").update(normalized(workspaceRoot)).digest("hex");
+  let value;
   try {
-    const value = JSON.parse(decryptMetadataTextSync(readFileSync(path.join(root, "workspace-index.json"), "utf8")));
+    value = JSON.parse(decryptMetadataTextSync(readFileSync(path.join(root, "workspaces", workspaceKey, "index.json"), "utf8")));
+  } catch {
+    try { value = JSON.parse(decryptMetadataTextSync(readFileSync(path.join(root, "workspace-index.json"), "utf8"))); } catch {}
+  }
+  if (typeof value?.workspaceRoot === "string" && normalized(value.workspaceRoot) === normalized(workspaceRoot)) {
     const metadata = { projectId: value.projectId, workspaceSnapshotId: value.latest, workspaceRoot: value.workspaceRoot };
     Object.defineProperty(metadata, "workspaceFiles", { value: Array.isArray(value.files) ? value.files : [], enumerable: false });
     return metadata;
-  } catch { return {}; }
+  }
+  // A missing matching snapshot must not borrow another project's files/hash.
+  return { projectId: createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 32), workspaceRoot, workspaceSnapshotId: undefined };
 }
 function artifactMetadata(observed, metadata) {
   const workspaceRoot = typeof metadata.workspaceRoot === "string" ? path.resolve(metadata.workspaceRoot) : undefined;
@@ -190,7 +201,7 @@ export function apply(ctx) {
     }).catch((error) => ctx.logger.warn(`dsh-sci lifecycle capture failed: ${String(error)}`));
   };
   const updateSession = (sessionId, patch) => {
-    const current = sessions.get(sessionId) ?? { schema: "dsh-sci.session-index.v1", sessionId, eventCount: 0, ...workspaceMetadata(root) };
+    const current = sessions.get(sessionId) ?? { schema: "dsh-sci.session-index.v1", sessionId, eventCount: 0 };
     const next = { ...current, ...patch };
     sessions.set(sessionId, next);
     queue = queue.then(async () => {
@@ -211,7 +222,7 @@ export function apply(ctx) {
   };
   const updateResearchRun = (sessionId, patch) => {
     const now = new Date().toISOString();
-    const current = researchRuns.get(sessionId) ?? { schema: "dsh-sci.research-run.v1", runId: randomUUID(), sessionId, startedAt: now, lastObservedAt: now, state: "active", outcome: "unverified", inputs: { status: "unverified", exactInputBaseline: false }, inputSummary: { status: "unverified", events: 0, observedPaths: 0 }, outputSummary: { status: "unverified", events: 0, observedPaths: 0 }, execution: { source: "dsh-session-observation", toolAttribution: "unavailable" }, eventCount: 0, observedPaths: [], artifactIds: [], eventTypes: {}, observations: { inputEvents: 0, outputEvents: 0, toolEvents: 0, errorEvents: 0, statusEvents: 0 }, observedCalls: [], ...workspaceMetadata(root) };
+    const current = researchRuns.get(sessionId) ?? { schema: "dsh-sci.research-run.v1", runId: randomUUID(), sessionId, startedAt: now, lastObservedAt: now, state: "active", outcome: "unverified", inputs: { status: "unverified", exactInputBaseline: false }, inputSummary: { status: "unverified", events: 0, observedPaths: 0 }, outputSummary: { status: "unverified", events: 0, observedPaths: 0 }, execution: { source: "dsh-session-observation", toolAttribution: "unavailable" }, eventCount: 0, observedPaths: [], artifactIds: [], eventTypes: {}, observations: { inputEvents: 0, outputEvents: 0, toolEvents: 0, errorEvents: 0, statusEvents: 0 }, observedCalls: [] };
     const next = { ...current, ...patch, lastObservedAt: now };
     researchRuns.set(sessionId, next);
     queue = queue.then(async () => {
@@ -231,13 +242,13 @@ export function apply(ctx) {
   };
   ctx.on("session/created", (session) => {
     const sessionId = sessionIdOf(session);
-    const run = updateResearchRun(sessionId, { ...workspaceMetadata(root), startedAt: new Date().toISOString(), state: "active" });
+    const run = updateResearchRun(sessionId, { ...workspaceMetadata(root, session), startedAt: new Date().toISOString(), state: "active" });
     updateSession(sessionId, { createdAt: new Date().toISOString(), cwd: typeof session.header?.cwd === "string" ? session.header.cwd : undefined, origin: typeof session.header?.origin === "string" ? session.header.origin : undefined, status: "created", researchRunId: run.runId });
     write({ schema: "dsh-sci.session-lifecycle.v1", type: "created", capturedAt: new Date().toISOString(), sessionId }, sessionId);
   });
   ctx.on("session/event", (session, event) => {
     const sessionId = sessionIdOf(session);
-    const metadata = workspaceMetadata(root);
+    const metadata = workspaceMetadata(root, session);
     const current = sessions.get(sessionId) ?? { schema: "dsh-sci.session-index.v1", sessionId, eventCount: 0, ...metadata };
     const paths = [...observedPaths(safeValue(event.data))];
     const artifacts = artifactMetadata(paths, metadata);
@@ -269,15 +280,15 @@ export function apply(ctx) {
   });
   ctx.on("agent/status", ({ agent, status }) => {
     const sessionId = sessionIdOf(agent.session);
-    updateSession(sessionId, { ...workspaceMetadata(root), agentStatus: status, lastEventAt: new Date().toISOString(), status: "active" });
-    const run = researchRuns.get(sessionId) ?? updateResearchRun(sessionId, { ...workspaceMetadata(root) });
+    updateSession(sessionId, { ...workspaceMetadata(root, agent.session), agentStatus: status, lastEventAt: new Date().toISOString(), status: "active" });
+    const run = researchRuns.get(sessionId) ?? updateResearchRun(sessionId, { ...workspaceMetadata(root, agent.session) });
     updateResearchRun(sessionId, { runId: run.runId, agentStatus: String(status) });
     write({ schema: "dsh-sci.agent-status.v1", type: "agent-status", capturedAt: new Date().toISOString(), sessionId, status }, sessionId);
   });
   ctx.on("session/disposed", (session) => {
     const sessionId = sessionIdOf(session);
-    updateSession(sessionId, { ...workspaceMetadata(root), disposedAt: new Date().toISOString(), status: "disposed" });
-    const run = researchRuns.get(sessionId) ?? updateResearchRun(sessionId, { ...workspaceMetadata(root) });
+    updateSession(sessionId, { ...workspaceMetadata(root, session), disposedAt: new Date().toISOString(), status: "disposed" });
+    const run = researchRuns.get(sessionId) ?? updateResearchRun(sessionId, { ...workspaceMetadata(root, session) });
     updateResearchRun(sessionId, { runId: run.runId, state: "disposed", disposedAt: new Date().toISOString() });
     write({ schema: "dsh-sci.session-lifecycle.v1", type: "disposed", capturedAt: new Date().toISOString(), sessionId }, sessionId);
   });

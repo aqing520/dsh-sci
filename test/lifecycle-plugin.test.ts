@@ -6,6 +6,39 @@ import assert from "node:assert/strict";
 // @ts-expect-error the runtime plugin is intentionally plain ESM JavaScript.
 import { apply } from "../desktop/dsh-sci-lifecycle-plugin.mjs";
 import { decryptMetadataText, isEncryptedMetadataText, serializeMetadataJson } from "../src/metadata-crypto.js";
+import { CaptureStore } from "../src/capture.js";
+
+test("lifecycle assigns each session its own workspace snapshot rather than the global latest", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "dsh-sci-session-workspaces-"));
+  const previous = process.env.DSH_SCI_CAPTURE_ROOT;
+  const a = path.join(root, "a"), b = path.join(root, "b"), capture = path.join(root, "capture");
+  let cleanup: (() => Promise<void>) | undefined;
+  try {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(a); await mkdir(b);
+    await writeFile(path.join(a, "a.txt"), "a"); await writeFile(path.join(b, "b.txt"), "b");
+    const store = new CaptureStore(capture);
+    const first = await store.snapshot(a), second = await store.snapshot(b);
+    process.env.DSH_SCI_CAPTURE_ROOT = capture;
+    const listeners = new Map<string, any>();
+    apply({ on(name: string, listener: any) { listeners.set(name, listener); }, effect(factory: any) { cleanup = factory(); }, logger: { warn() {} } });
+    for (const [id, cwd] of [["a", a], ["b", b]]) {
+      const session = { id, header: { cwd } };
+      listeners.get("session/created")(session);
+      listeners.get("session/event")(session, { type: "user/input", data: {}, seq: 1 });
+    }
+    await listeners.get("session/flush")();
+    const one = JSON.parse(await readFile(path.join(capture, "sessions", "a", "session.json"), "utf8"));
+    const two = JSON.parse(await readFile(path.join(capture, "sessions", "b", "session.json"), "utf8"));
+    assert.equal(one.projectId, first.projectId); assert.equal(one.workspaceSnapshotId, first.snapshotId);
+    assert.equal(two.projectId, second.projectId); assert.equal(two.workspaceSnapshotId, second.snapshotId);
+    assert.notEqual(one.workspaceSnapshotId, two.workspaceSnapshotId);
+  } finally {
+    await cleanup?.();
+    if (previous === undefined) delete process.env.DSH_SCI_CAPTURE_ROOT; else process.env.DSH_SCI_CAPTURE_ROOT = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("lifecycle plugin persists sanitized session events", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "dsh-sci-lifecycle-"));

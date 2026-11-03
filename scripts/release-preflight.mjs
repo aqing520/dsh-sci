@@ -46,6 +46,7 @@ record(await run("Harness smoke", process.execPath, ["scripts/research-harness-s
 record(await run("Harness native guard smoke", process.execPath, ["scripts/research-harness-smoke.mjs", "--guard"], 2 * 60_000));
 record(await run("Harness PTC default guard smoke", process.execPath, ["scripts/research-harness-smoke.mjs", "--guard-ptc"], 2 * 60_000));
 record(await run("SDK smoke", process.execPath, ["scripts/research-sdk-smoke.mjs"]));
+record(await run("Native conversation research smoke", process.execPath, ["scripts/research-conversation-smoke.mjs"], 2 * 60_000));
 record(await run("Research Workspace smoke", npm, ["run", "research:workspace:smoke"]));
 record(await run("Research Workspace permissions smoke", npm, ["run", "research:access:smoke"], 2 * 60_000));
 record(await run("Electron application crash recovery smoke", npm, ["run", "research:app-crash:smoke"], 3 * 60_000));

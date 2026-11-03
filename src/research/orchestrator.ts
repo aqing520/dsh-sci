@@ -34,10 +34,11 @@ import { planCommitHash, planStateDigest, type ResearchPlanCommit } from "./plan
 import { contentDigest } from "./content-digest.js";
 import { checkCandidateCodeSyntax, type CodeSyntaxCheck } from "./code-syntax.js";
 import { researchReferenceIds } from "./result-references.js";
+import { realpath } from "node:fs/promises";
 
 export interface CreateResearchProjectOptions { title?: string; plan?: ResearchPlanInput; budget?: ResearchBudgetLimits; signal?: AbortSignal; }
 export interface ResearchBudgetUpdateOptions { restartWallClock?: boolean; }
-export interface ResearchOrchestratorOptions { experimentPolicy?: ExperimentExecutionPolicy; ocrProvider?: ResearchOcrProvider; strictPlanning?: boolean; }
+export interface ResearchOrchestratorOptions { experimentPolicy?: ExperimentExecutionPolicy; ocrProvider?: ResearchOcrProvider; strictPlanning?: boolean; sessionScoped?: boolean; }
 type TaskExecutionReservation =
   | { allowed: true; remainingMs: number; project: ResearchProject; plan: ResearchPlan; task: ResearchTask }
   | { allowed: false; status: "blocked" | "waiting-approval" | "budget-exhausted"; reason: string };
@@ -63,9 +64,25 @@ function boundedMemoryContext(results: MemorySearchResult[], projectId: string) 
 
 /** Coordinates the first recoverable research loop without owning model/tool execution. */
 export class ResearchOrchestrator {
+  private projectViews = new Map<string, ResearchOrchestrator>();
   private runningExperiments = new Set<string>();
   private experimentOperations = new Map<string, { controller: AbortController; operation: Promise<ExperimentRun> }>();
   constructor(readonly repository: ResearchRepository, readonly memoryOptions: { embedder?: MemoryEmbedder } = {}, readonly planner: ResearchPlanner = new DefaultResearchPlanner(), readonly options: ResearchOrchestratorOptions = {}) {}
+
+  /** Shared workspace-bound view for both conversation tools and trusted review UI. */
+  async forProject(projectId: string): Promise<ResearchOrchestrator> {
+    const project = await this.requireProject(projectId);
+    if (project.mode !== "conversation" || !project.workspaceRoot) return this;
+    const resolved = await realpath(project.workspaceRoot);
+    const workspaceRoot = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    if (workspaceRoot !== project.workspaceRoot) throw new Error("The research workspace was relocated; review its binding before accessing files");
+    let view = this.projectViews.get(projectId);
+    if (!view) {
+      view = new ResearchOrchestrator(this.repository, this.memoryOptions, this.planner, { ...this.options, sessionScoped: true, experimentPolicy: { ...this.options.experimentPolicy, workspaceRoot } });
+      this.projectViews.set(projectId, view);
+    }
+    return view;
+  }
 
   private serialize<T>(projectId: string, operation: () => Promise<T>, recover = true): Promise<T> {
     const key = this.projectKey(projectId);
@@ -309,6 +326,7 @@ export class ResearchOrchestrator {
   async createExperiment(projectId: string, input: Parameters<typeof makeExperimentDefinition>[1]): Promise<ExperimentDefinition> {
     return this.serialize(projectId, async () => {
       const project = await this.requireProject(projectId);
+      if (project.mode === "conversation" && (!input.designId || !input.codeBundleId)) throw new Error("Conversation experiments require a saved approved design and a code/input bundle");
       const plan = project.planId ? await this.repository.readPlan(projectId, project.planId) : undefined;
       if (input.taskId) {
         if (!plan?.tasks.some((task) => task.taskId === input.taskId)) throw new Error(`unknown task: ${input.taskId}`);
@@ -434,7 +452,7 @@ export class ResearchOrchestrator {
       const project = await this.requireProject(projectId);
       const plan = project.planId ? await this.repository.readPlan(projectId, project.planId) : undefined;
       const task = plan?.tasks.find((item) => item.taskId === project.activeTaskId);
-      if (!plan || !task || ["paused", "failed", "completed"].includes(project.status) || !["experiment-design", "code-preparation", "experiment", "custom"].includes(task.kind) || !(task.allowedActions ?? []).includes("code-stage") || task.status !== "running") throw new Error("code staging requires an active task with code-stage permission");
+      if (!plan || !task || ["paused", "failed", "completed"].includes(project.status) || !["experiment-design", "code-preparation", "experiment", "custom", "conversation"].includes(task.kind) || !(task.allowedActions ?? []).includes("code-stage") || task.status !== "running") throw new Error("code staging requires an active task with code-stage permission");
       const replacements = validateCodeStagingFiles(input);
       const workspace = this.options.experimentPolicy?.workspaceRoot ?? this.repository.root;
       let files: CodeRevisionInput["files"] = replacements;
@@ -509,6 +527,7 @@ export class ResearchOrchestrator {
   }
 
   async cancelRunningExperiments(): Promise<void> {
+    await Promise.all([...this.projectViews.values()].map((view) => view.cancelRunningExperiments()));
     const operations = [...this.experimentOperations.values()];
     for (const { controller } of operations) controller.abort();
     await Promise.allSettled(operations.map(({ operation }) => operation));
@@ -520,6 +539,14 @@ export class ResearchOrchestrator {
     const definition = await this.repository.readExperiment(projectId, experimentId);
     if (!definition) throw new Error(`research experiment not found: ${experimentId}`);
     if (!options.approved) throw new Error("experiment execution requires explicit approval");
+    if (project.mode === "conversation") {
+      const runs = (await this.repository.listExperimentRuns(projectId)).filter((run) => run.experimentId === experimentId);
+      if (runs.length === 1 && runs[0].state === "completed") return runs[0];
+      if (runs.length) throw new Error("This conversation proposal already ran; review its records and create a new proposal before another execution");
+      if (!definition.designId || !definition.codeBundleId) throw new Error("Conversation experiments require a design and code/input binding");
+      const reviews = await this.repository.listCodeReviews(projectId);
+      if (!reviews.some((review) => review.bundleId === definition.codeBundleId && review.designBinding?.designId === definition.designId && review.designBinding?.contentHash === definition.designContentHash && !review.findings.some((finding) => finding.severity === "blocker"))) throw new Error("Experiment requires a saved complete code review bound to its design and bundle, with no unresolved blockers");
+    }
     if (definition.designId) {
       const design = await this.repository.readExperimentDesign(projectId, definition.designId);
       if (!design || design.status !== "approved" || design.planId !== project.planId) throw new Error("experiment execution requires an approved design from the current plan");
@@ -580,7 +607,7 @@ export class ResearchOrchestrator {
       if (input.taskId) {
         const task = plan.tasks.find((item) => item.taskId === input.taskId);
         if (!task) throw new Error(`unknown task: ${input.taskId}`);
-        if (!["evaluate", "custom"].includes(task.kind)) throw new Error("Research evaluation must bind to an evaluation or custom task");
+        if (!["evaluate", "custom", "conversation"].includes(task.kind)) throw new Error("Research evaluation must bind to an evaluation, custom or conversation task");
       }
       for (const runId of input.experimentRunIds ?? []) {
         const run = await this.repository.readExperimentRun(projectId, runId);
@@ -873,7 +900,7 @@ export class ResearchOrchestrator {
       const plan = project.planId ? await this.repository.readPlan(projectId, project.planId) : undefined;
       const taskId = input.taskId ?? project.activeTaskId;
       const task = plan?.tasks.find((item) => item.taskId === taskId);
-      if (!plan || !task || taskId !== project.activeTaskId || project.status === "paused" || task.kind !== "hypothesis" || task.status !== "running") throw new Error("hypothesis must be created by the active hypothesis task");
+      if (!plan || !task || taskId !== project.activeTaskId || project.status === "paused" || !["hypothesis", "conversation"].includes(task.kind) || task.status !== "running") throw new Error("hypothesis must be created by the active hypothesis or conversation task");
       for (const claimId of input.claimIds ?? []) if (!(await this.repository.readClaim(projectId, claimId))) throw new Error(`research claim not found for hypothesis: ${claimId}`);
       for (const citationId of input.citationIds ?? []) if (!(await this.repository.readCitation(projectId, citationId))) throw new Error(`research citation not found: ${citationId}`);
       const hypothesis = makeResearchHypothesis(projectId, { ...input, planId: plan.planId, taskId });
@@ -900,7 +927,7 @@ export class ResearchOrchestrator {
       const plan = project.planId ? await this.repository.readPlan(projectId, project.planId) : undefined;
       const taskId = input.taskId ?? project.activeTaskId;
       const task = plan?.tasks.find((item) => item.taskId === taskId);
-      if (!plan || !task || taskId !== project.activeTaskId || project.status === "paused" || task.kind !== "experiment-design" || task.status !== "running") throw new Error("experiment design must be created by the active experiment-design task");
+      if (!plan || !task || taskId !== project.activeTaskId || project.status === "paused" || !["experiment-design", "conversation"].includes(task.kind) || task.status !== "running") throw new Error("experiment design must be created by the active experiment-design or conversation task");
       if (!Array.isArray(input.hypothesisIds) || !input.hypothesisIds.length || input.hypothesisIds.length > 50) throw new Error("experiment design requires 1 to 50 hypothesis IDs");
       const hypotheses = await Promise.all(input.hypothesisIds.map((id) => this.repository.readHypothesis(projectId, id)));
       const storedHypotheses = await this.repository.listHypotheses(projectId);
@@ -1049,6 +1076,32 @@ export class ResearchOrchestrator {
     return (await this.replanInternal(projectId, signal)).result;
   }
 
+  /** Explicit trusted-host migration. Existing artifacts and limits stay in the
+   * project; old code/approvals remain bound to their superseded plan. */
+  async adoptConversation(projectId: string, workspaceRoot: string): Promise<ResearchProject> {
+    await this.serialize(projectId, async () => {
+      const { project, plan: beforePlan } = await this.load(projectId);
+      if (project.mode === "conversation") {
+        if (project.workspaceRoot !== workspaceRoot) throw new Error("Conversation project belongs to another workspace");
+        return;
+      }
+      const budget = await this.repository.readBudget(projectId);
+      if (budget?.schema === "dsh-sci.research-budget.v2" && budget.modelRequests.some((request) => request.status === "reserved")) throw new Error("Wait for pending model requests before migrating research");
+      if ((await this.repository.listExperimentRuns(projectId)).some((run) => run.state === "running" || run.state === "interrupted")) throw new Error("Review unfinished experiments before migrating research");
+      const nextPlan = { ...buildResearchPlan(projectId, { question: project.question, constraints: beforePlan.constraints, tasks: [{ taskId: "conversation", title: "Research in this conversation", objective: project.question, kind: "conversation" }] }), version: beforePlan.version + 1 };
+      const nextProject: ResearchProject = { ...project, mode: "conversation", workspaceRoot, conversationOriginPlanId: beforePlan.planId, planId: nextPlan.planId, iteration: project.iteration + 1, activeTaskId: undefined, status: "planning", lastError: undefined, updatedAt: nextPlan.updatedAt };
+      const content: Omit<ResearchPlanCommit, "contentHash"> = { schema: "dsh-sci.research-plan-commit.v1", commitId: contentDigest({ projectId, beforePlanId: beforePlan.planId, nextPlanId: nextPlan.planId }), projectId, status: "prepared", beforeProject: project, beforePlan, nextProject, nextPlan, events: [makeEvent(projectId, "plan-created", { planId: nextPlan.planId, values: { mode: "conversation", supersedesPlanId: beforePlan.planId, migrated: true } })] };
+      const commit: ResearchPlanCommit = { ...content, contentHash: planCommitHash(content) };
+      await this.repository.savePlanCommit(commit);
+      await this.repository.applyPlanCommit(commit);
+    });
+    await this.activatePlan(projectId);
+    const execution = await this.prepareTaskExecution(projectId);
+    // A migration never expands a legacy/expired budget. The host can inspect
+    // the migrated project and explicitly configure its budget before resuming.
+    return execution.allowed ? execution.project : (await this.repository.readProject(projectId))!;
+  }
+
   private async replanInternal(projectId: string, signal?: AbortSignal, decisionSnapshot?: DecisionSnapshot, decisionReason?: string) {
     const previous = await this.serialize(projectId, async () => {
       const project = await this.requireProject(projectId);
@@ -1189,7 +1242,7 @@ export class ResearchOrchestrator {
     const task = plan.tasks.find((item) => item.taskId === taskId)!;
     const project = { ...loaded.project, status: projectStatusFor(plan, loaded.project.iteration), activeTaskId: taskId, updatedAt: plan.updatedAt };
     await this.repository.savePlan(plan); await this.repository.saveProject(project);
-    await this.repository.saveActiveContext({ projectId, planId: plan.planId, taskId });
+    if (!this.options.sessionScoped) await this.repository.saveActiveContext({ projectId, planId: plan.planId, taskId });
     await this.repository.appendEvent(makeEvent(projectId, original.requiresApproval ? "task-waiting-approval" : "task-started", { planId: plan.planId, taskId }));
     return { project, plan, task };
   }
@@ -1201,7 +1254,7 @@ export class ResearchOrchestrator {
     const plan = transitionTask(loaded.plan, taskId, "running");
     const project = { ...loaded.project, status: projectStatusFor(plan, loaded.project.iteration), updatedAt: plan.updatedAt };
     await this.repository.savePlan(plan); await this.repository.saveProject(project); await this.repository.appendEvent(makeEvent(projectId, "task-started", { planId: plan.planId, taskId, values: { approved: true } }));
-    await this.repository.saveActiveContext({ projectId, planId: plan.planId, taskId });
+    if (!this.options.sessionScoped) await this.repository.saveActiveContext({ projectId, planId: plan.planId, taskId });
     return { project, plan, task: plan.tasks.find((item) => item.taskId === taskId)! };
   }
 

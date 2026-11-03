@@ -14,11 +14,12 @@ test("research plugin exposes task context and records session boundaries", asyn
   const cleanups: Array<() => Promise<void>> = [];
   try {
     process.env.DSH_SCI_RESEARCH_ROOT = root;
+    process.env.DSH_SCI_EXTERNAL_RUNNER = "1";
     apply({
       provide(name: string, value: any) { if (name === "dshSciResearch") service = value; },
       on(name: string, listener: (...args: any[]) => any) { listeners.set(name, listener); },
       effect(factory: () => () => Promise<void>) { cleanups.push(factory()); },
-      tools: { register(definition: any) { registeredTools.push(definition); return () => undefined; } },
+      tools: { guard() {}, restrict() {}, presentAs() {}, register(definition: any) { registeredTools.push(definition); return () => undefined; } },
       logger: { warn() {} },
     });
     const session = { id: "session-1" };
@@ -28,6 +29,7 @@ test("research plugin exposes task context and records session boundaries", asyn
     assert.deepEqual(registeredTools.map((tool) => tool.name), ["research_context", "research_record_event", "research_action"]);
     const assemble = listeners.get("system-prompt/assemble");
     assert.ok(assemble);
+    await writeFile(path.join(root, "active-context.json"), JSON.stringify({ projectId: "project-1", taskId: "task-1" }));
     const assembled = await assemble!({ contexts: [] }, { agent: { id: session.id, session } }, async () => ({ sections: [], contexts: [], tools: [], variables: {} }));
     assert.match(assembled.contexts[0].text, /task-1/);
     listeners.get("session/event")!(session, { type: "tool/result", seq: 4 });
@@ -42,24 +44,26 @@ test("research plugin exposes task context and records session boundaries", asyn
     await cleanups[0]();
   } finally {
     delete process.env.DSH_SCI_RESEARCH_ROOT;
+    delete process.env.DSH_SCI_EXTERNAL_RUNNER;
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("research plugin restores the active task context from its bridge file", async () => {
+test("external runner restores the active task context from its bridge file", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "dsh-sci-research-plugin-context-"));
   try {
     process.env.DSH_SCI_RESEARCH_ROOT = root;
+    process.env.DSH_SCI_EXTERNAL_RUNNER = "1";
     await writeFile(path.join(root, "active-context.json"), JSON.stringify({ schema: "dsh-sci.research-active-context.v1", projectId: "project-2", taskId: "task-2" }), "utf8");
     const listeners = new Map<string, (...args: any[]) => any>();
     let service: any;
-    const ctx = { provide(name: string, value: any) { if (name === "dshSciResearch") service = value; }, on(name: string, listener: (...args: any[]) => any) { listeners.set(name, listener); }, effect() {}, logger: { warn() {} } };
+    const ctx = { tools: { guard() {}, restrict() {}, presentAs() {}, register() {} }, provide(name: string, value: any) { if (name === "dshSciResearch") service = value; }, on(name: string, listener: (...args: any[]) => any) { listeners.set(name, listener); }, effect() {}, logger: { warn() {} } };
     apply(ctx as any);
     const session = { id: "session-2" };
     listeners.get("session/created")!(session);
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(service.getContext(session), { projectId: "project-2", taskId: "task-2" });
-  } finally { delete process.env.DSH_SCI_RESEARCH_ROOT; await rm(root, { recursive: true, force: true }); }
+  } finally { delete process.env.DSH_SCI_RESEARCH_ROOT; delete process.env.DSH_SCI_EXTERNAL_RUNNER; await rm(root, { recursive: true, force: true }); }
 });
 
 test("external runner restricts the agent to research bridge tools and step budget", async () => {

@@ -357,18 +357,19 @@ function installCaptureIpc() {
   researchIpc.handle("research:memory-conflicts", async (event, projectId) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.listMemoryConflicts(String(projectId)); });
   researchIpc.handle("research:memory-review", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.reviewMemoryConflict(String(input?.projectId), { conflictKey: String(input?.conflictKey ?? ""), status: input?.status, selectedMemoryId: typeof input?.selectedMemoryId === "string" ? input.selectedMemoryId : undefined, note: typeof input?.note === "string" ? input.note : undefined }); });
   researchIpc.handle("research:memory-review-batch", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); if (!Array.isArray(input?.reviews)) throw new Error("memory review batch requires reviews"); return researchOrchestrator.reviewMemoryConflicts(String(input?.projectId), input.reviews.map((review) => ({ conflictKey: String(review?.conflictKey ?? ""), status: review?.status, selectedMemoryId: typeof review?.selectedMemoryId === "string" ? review.selectedMemoryId : undefined, note: typeof review?.note === "string" ? review.note : undefined }))); });
-  researchIpc.handle("research:create-experiment", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.createExperiment(String(input?.projectId), input ?? {}); });
-  researchIpc.handle("research:approve-experiment", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.approveExperiment(String(input?.projectId), String(input?.experimentId), String(input?.contentHash)); });
-  researchIpc.handle("research:experiment-review", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.experimentReview(String(input?.projectId), String(input?.experimentId)); });
+  researchIpc.handle("research:create-experiment", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return (await researchOrchestrator.forProject(String(input?.projectId))).createExperiment(String(input?.projectId), input ?? {}); });
+  researchIpc.handle("research:approve-experiment", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return (await researchOrchestrator.forProject(String(input?.projectId))).approveExperiment(String(input?.projectId), String(input?.experimentId), String(input?.contentHash)); });
+  researchIpc.handle("research:experiment-review", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return (await researchOrchestrator.forProject(String(input?.projectId))).experimentReview(String(input?.projectId), String(input?.experimentId)); });
   researchIpc.handle("research:approve-experiment-design", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.approveExperimentDesign(String(input?.projectId), String(input?.designId), String(input?.contentHash)); });
   researchIpc.handle("research:review-experiment-design", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.reviewExperimentDesign(String(input?.projectId), String(input?.designId), { contentHash: String(input?.contentHash ?? ""), criteria: input?.criteria, status: input?.status, note: String(input?.note ?? "") }); });
-  researchIpc.handle("research:execute-experiment", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return researchOrchestrator.executeExperiment(String(input?.projectId), String(input?.experimentId), { approved: input?.approved === true }); });
+  researchIpc.handle("research:execute-experiment", async (event, input) => { assertResearchWindow(event); if (!researchOrchestrator) throw new Error("Research orchestrator is not ready"); return (await researchOrchestrator.forProject(String(input?.projectId))).executeExperiment(String(input?.projectId), String(input?.experimentId), { approved: input?.approved === true }); });
   researchIpc.handle("research:run-agent", async (event, input) => {
     assertResearchWindow(event);
     if (!researchOrchestrator || !researchBridge) throw new Error("Research agent is not ready");
-    if (researchAgentProviderConfig.provider === "deepseek") throw new Error("The automatic research runner needs an OpenAI Responses-compatible provider (OpenAI, TokenFans or custom); official DeepSeek is only supported in the chat workspace.");
     const projectId = typeof input?.projectId === "string" ? input.projectId.trim() : "";
     if (!projectId) throw new Error("Research project ID is required");
+    if ((await researchRepository.readProject(projectId))?.mode === "conversation") throw new Error("这个研究由主对话中的 Agent 执行，请回到对应会话继续。此窗口用于查看和审阅证据。");
+    if (researchAgentProviderConfig.provider === "deepseek") throw new Error("The legacy SDK research runner needs an OpenAI Responses-compatible provider. Research tools in the main conversation use the current DSH provider, including DeepSeek.");
     if (researchAgentRuns.size) throw new Error("A DSH research run is already active; wait or cancel it first");
     const controller = new AbortController();
     researchAgentRuns.set(projectId, controller);
@@ -604,7 +605,17 @@ async function startOfficialHarness() {
   serviceRuntimeConfig = { baseUrl: serviceConfig.baseUrl, timeoutMs: serviceConfig.timeoutMs, retries: serviceConfig.retries, keyConfigured: Boolean(serviceConfig.apiKey) };
   searchProvider = serviceConfig.baseUrl && serviceConfig.apiKey ? new HttpSearchProvider(serviceConfig) : undefined;
   const { startResearchBridge } = await import("../dist/src/research/bridge.js");
-  researchBridge = await startResearchBridge(researchOrchestrator, { search: searchProvider });
+  const { ResearchConversations } = await import("../dist/src/research/conversation.js");
+  const workspaceCaptureTimes = new Map();
+  const conversations = new ResearchConversations(researchOrchestrator, {
+    async observeWorkspace(workspaceRoot, sessionId, force) {
+      if (!force && Date.now() - (workspaceCaptureTimes.get(workspaceRoot) ?? 0) < 15_000) return;
+      if (!(await captureStore.readStatus()).enabled) return;
+      try { await captureStore.snapshot(workspaceRoot, { sessionId }); workspaceCaptureTimes.set(workspaceRoot, Date.now()); }
+      catch (error) { console.warn("Session workspace capture failed:", error); }
+    },
+  });
+  researchBridge = await startResearchBridge(researchOrchestrator, { search: searchProvider, conversations });
   process.env.DSH_SCI_RESEARCH_BRIDGE_URL = researchBridge.url;
   process.env.DSH_SCI_RESEARCH_BRIDGE_TOKEN = researchBridge.token;
   quotaProvider = serviceConfig.baseUrl && serviceConfig.apiKey ? new HttpQuotaProvider(serviceConfig) : undefined;
@@ -635,6 +646,7 @@ async function startOfficialHarness() {
       DSH_SCI_TOOLS_MODULE_URL: import.meta.resolve("@deepseek-ai/dsh-tools"),
       DSH_SCI_RESEARCH_BRIDGE_URL: researchBridge.url,
       DSH_SCI_RESEARCH_BRIDGE_TOKEN: researchBridge.token,
+      DSH_SCI_RESEARCH_APPROVAL_TOKEN: researchBridge.approvalToken,
     },
   });
   harnessProcess = result.process;

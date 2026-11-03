@@ -3,7 +3,7 @@ import { allowedActionsFor, successCriteriaFor, taskContractFor, type ResearchTa
 
 export type ResearchProjectStatus = "created" | "planning" | "researching" | "hypothesizing" | "experimenting" | "evaluating" | "iterating" | "reporting" | "completed" | "paused" | "failed";
 export type ResearchTaskStatus = "pending" | "ready" | "running" | "waiting-approval" | "blocked" | "completed" | "failed" | "skipped";
-export type ResearchTaskKind = "clarify" | "research" | "source-review" | "hypothesis" | "experiment-design" | "code-preparation" | "code-review" | "experiment" | "evaluate" | "report" | "custom";
+export type ResearchTaskKind = "clarify" | "research" | "source-review" | "hypothesis" | "experiment-design" | "code-preparation" | "code-review" | "experiment" | "evaluate" | "report" | "custom" | "conversation";
 
 export interface ResearchTask {
   schema: "dsh-sci.research-task.v1";
@@ -63,6 +63,10 @@ export interface ResearchProject {
   createdAt: string;
   updatedAt: string;
   lastError?: string;
+  /** Native conversation projects keep execution and memory tied to this directory. */
+  mode?: "conversation";
+  workspaceRoot?: string;
+  conversationOriginPlanId?: string;
 }
 
 export type ResearchEventType = "planning-fallback" | "project-created" | "plan-created" | "plan-activated" | "task-ready" | "task-started" | "task-waiting-approval" | "task-result-repair-requested" | "task-result-submitted" | "task-completed" | "task-failed" | "task-blocked" | "task-skipped" | "project-paused" | "project-resumed" | "project-completed" | "project-failed" | "source-added" | "source-content-saved" | "source-read" | "source-related" | "citation-added" | "citation-reviewed" | "claim-added" | "evidence-linked" | "evidence-reviewed" | "search-completed" | "search-failed" | "experiment-interrupted" | "experiment-created" | "experiment-approved" | "code-staged" | "code-read" | "code-review-recorded" | "experiment-design-created" | "experiment-design-approved" | "design-reviewed" | "hypothesis-created" | "experiment-started" | "experiment-completed" | "artifact-registered" | "evaluation-recorded" | "decision-recorded" | "report-generated" | "report-reviewed" | "iteration-started" | "memory-conflict-reviewed" | "research-action-accepted" | "research-action-rejected" | "research-budget-exhausted" | "research-budget-updated";
@@ -185,7 +189,7 @@ export function projectStatusFor(plan: ResearchPlan, iteration: number): Researc
   if (plan.tasks.some((task) => task.status === "failed" && task.attempts >= task.maxAttempts)) return "failed";
   if (plan.tasks.every((task) => task.status === "completed" || task.status === "skipped")) return "completed";
   const active = plan.tasks.find((task) => ["running", "waiting-approval", "blocked"].includes(task.status));
-  if (active) return active.kind === "experiment" || active.kind === "experiment-design" ? "experimenting" : active.kind === "research" || active.kind === "source-review" ? "researching" : active.kind === "hypothesis" ? "hypothesizing" : active.kind === "evaluate" ? "evaluating" : active.kind === "report" ? "reporting" : iteration > 0 ? "iterating" : "planning";
+  if (active) return active.kind === "experiment" || active.kind === "experiment-design" ? "experimenting" : active.kind === "research" || active.kind === "source-review" || active.kind === "conversation" ? "researching" : active.kind === "hypothesis" ? "hypothesizing" : active.kind === "evaluate" ? "evaluating" : active.kind === "report" ? "reporting" : iteration > 0 ? "iterating" : "planning";
   return iteration > 0 ? "iterating" : "planning";
 }
 

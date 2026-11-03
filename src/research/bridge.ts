@@ -7,26 +7,29 @@ import { makeEvent, type ResearchProject } from "./domain.js";
 import { researchTaskResultGuidance, researchTaskResultSchema, taskResultIdentity } from "./task-result.js";
 import { researchInspection } from "./inspect.js";
 import { codeStagingFailureCode } from "./code-staging.js";
+import type { ResearchConversations } from "./conversation.js";
 
 export const researchActions = ["context", "list", "create", "inspect", "approval-queue", "activate", "start", "complete", "fail", "task-result", "source", "reference", "source-read", "chunk-read", "citation", "claim", "evidence", "hypothesis", "design", "code-stage", "code-read", "code-review", "document", "search", "experiment", "artifact", "evaluation", "evaluate", "decide-iteration", "report", "report-read", "memory", "memory-search", "memory-index-rebuild", "memory-retrievals", "memory-conflicts", "memory-review", "memory-review-batch", "iterate"] as const;
 
 /** The desktop owns all writes. The Harness receives only a short-lived loopback capability. */
-export async function startResearchBridge(orchestrator: ResearchOrchestrator, options: { search?: SearchProvider; runnerProjectId?: string; maxRequestsPerMinute?: number; access?: "research" | "read-only"; scopeProjectId?: string } = {}) {
+export async function startResearchBridge(orchestrator: ResearchOrchestrator, options: { search?: SearchProvider; runnerProjectId?: string; maxRequestsPerMinute?: number; access?: "research" | "read-only"; scopeProjectId?: string; conversations?: ResearchConversations } = {}) {
   options = { ...options };
   if (options.access !== undefined && !["research", "read-only"].includes(options.access)) throw new Error("Invalid research bridge access");
   if (options.access === "read-only" && options.runnerProjectId) throw new Error("Read-only bridge cannot run automatic tasks");
+  if (options.conversations && (options.access === "read-only" || options.runnerProjectId || options.scopeProjectId)) throw new Error("Conversation bridge must use session-bound project scopes");
   if (options.scopeProjectId && options.runnerProjectId && options.scopeProjectId !== options.runnerProjectId) throw new Error("Bridge project scopes conflict");
   // Permissions are fixed by the trusted host when this token is issued; request fields cannot change them.
   const readOnly = options.access === "read-only", scopeProjectId = options.scopeProjectId ?? options.runnerProjectId;
   // Source reading and searches save receipts, query logs or indexes, so they require write access.
   const readerActions = new Set(["context", "list", "inspect", "approval-queue", "report-read", "memory-retrievals", "memory-conflicts"]);
   const token = randomBytes(32).toString("hex");
+  const approvalToken = options.conversations ? randomBytes(32).toString("hex") : undefined;
   let queue: Promise<unknown> = Promise.resolve();
   let closed = false;
   let closePromise: Promise<void> | undefined;
   const controllers = new Set<AbortController>();
   const requestTimes: number[] = [];
-  const dispatch = async (input: Record<string, any>, signal: AbortSignal): Promise<unknown> => {
+  const dispatchFor = (orchestrator: ResearchOrchestrator) => async (input: Record<string, any>, signal: AbortSignal): Promise<unknown> => {
     signal.throwIfAborted();
     const repository = orchestrator.repository;
     if (readOnly && !readerActions.has(input.action)) throw new Error("Read-only research capability refuses this action");
@@ -175,7 +178,13 @@ export async function startResearchBridge(orchestrator: ResearchOrchestrator, op
         const project = projectId ? await orchestrator.repository.readProject(projectId) : undefined;
         let value: unknown;
         try {
-          value = await dispatch(actionInput, controller.signal);
+          const approvalHeader = request.headers["x-dsh-sci-approval"];
+          const approvalBytes = Buffer.from(typeof approvalHeader === "string" ? approvalHeader : "");
+          const expectedApproval = Buffer.from(approvalToken ?? "");
+          const trustedApproval = Boolean(approvalToken && approvalBytes.length === expectedApproval.length && timingSafeEqual(approvalBytes, expectedApproval));
+          value = options.conversations
+            ? await options.conversations.dispatch({ ...actionInput, trustedApproval }, controller.signal, (scoped, input) => dispatchFor(scoped)(input, controller.signal))
+            : await dispatchFor(orchestrator)(actionInput, controller.signal);
         } catch (error) {
           await auditAction(actionInput, project, "rejected", error);
           await securityAudit({ action: actionInput.action, outcome: "rejected", reason: "action-validation-or-execution", ...(project ? { projectId: project.projectId } : {}) });
@@ -206,13 +215,15 @@ export async function startResearchBridge(orchestrator: ResearchOrchestrator, op
       });
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 19) throw error;
+      // Windows can reserve dynamic port ranges and report EACCES for a free
+      // port. Pick another random loopback port; never request elevation.
+      if (!["EADDRINUSE", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "") || attempt >= 19) throw error;
     }
   }
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Research bridge has no TCP address");
   return {
-    url: `http://127.0.0.1:${address.port}/research`, token,
+    url: `http://127.0.0.1:${address.port}/research`, token, approvalToken,
     close(): Promise<void> {
       closed = true;
       closePromise ??= (async () => {
