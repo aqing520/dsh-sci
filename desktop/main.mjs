@@ -474,7 +474,11 @@ async function publishLocalMetadataBackup() {
 }
 
 function installApplicationMenu() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: "dsh-sci", submenu: [{ label: "Research Workspace", click: () => void openResearchDashboard() }, { label: "Research Workspace (Read Only)", click: () => void openResearchDashboard("read-only") }, { label: "Capture History", click: () => void openCaptureDashboard() }, { label: "Queue Metadata Backup", click: () => void publishLocalMetadataBackup() }, { type: "separator" }, { role: "quit" }] }]));
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: "dsh-sci", submenu: [{ label: "Research Workspace", click: () => void openResearchDashboard() }, { label: "Research Workspace (Read Only)", click: () => void openResearchDashboard("read-only") }, { label: "Capture History", click: () => void openCaptureDashboard() }, { label: "Queue Metadata Backup", click: () => void publishLocalMetadataBackup() }, { type: "separator" }, { role: "quit" }] },
+    // Native editing roles also register macOS Command-key shortcuts in inputs.
+    { role: "editMenu" },
+  ]));
 }
 
 async function createStartupErrorWindow(error) {

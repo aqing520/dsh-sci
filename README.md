@@ -64,12 +64,12 @@
 
 ### 从源码运行
 
-要求 Windows、Node.js 20+ 和 npm：
+支持 Windows 和 macOS 源码开发，要求 Node.js 20+ 和 npm；建议使用 Node.js 24。Windows 安装包与 macOS 的依赖目录不能混用，换系统后重新运行 `npm ci`：
 
 ```powershell
 git clone https://github.com/aqing520/dsh-sci.git
 cd dsh-sci
-npm install
+npm ci
 npm run desktop:dev
 ```
 
@@ -79,7 +79,7 @@ npm run desktop:dev
 
 开发环境在项目根目录创建被 Git 忽略的 `.env.local`：
 
-默认使用 **DeepSeek 官方**，只需要一个 API key：启动后打开 DSH 的 **设置 → 模型**，选择提供商并填入 key 即可，无需编辑任何文件。key 保存在本机 `%APPDATA%\dsh-sci\harness\.credentials.yaml`（明文，请勿外传）。也可以在启动环境里设置 `DEEPSEEK_API_KEY`。
+默认使用 **DeepSeek 官方**，只需要一个 API key：启动后打开 DSH 的 **设置 → 模型**，选择提供商并填入 key 即可，无需编辑任何文件。key 保存在本机应用数据目录下的 `harness/.credentials.yaml`（明文，请勿外传）；Windows 为 `%APPDATA%\dsh-sci`，macOS 为 `~/Library/Application Support/dsh-sci`。也可以在启动环境里设置 `DEEPSEEK_API_KEY`。
 
 如需其他服务，通过 `.env.local` 指定一个兼容 OpenAI Responses 协议（`/responses`）的上游 API。
 
@@ -129,9 +129,12 @@ DSH_SCI_API_KEY=your-key
 
 运行数据默认位于：
 
-```text
-%APPDATA%dsh-sci
-```
+| 系统 | 应用数据目录 |
+| --- | --- |
+| Windows | `%APPDATA%\dsh-sci` |
+| macOS | `~/Library/Application Support/dsh-sci` |
+
+换系统可以继续使用同一份源码，但旧机器的凭据与研究数据库需要另外迁移。研究记录绑定实际工作区路径，不能仅把 Windows 目录改成 Mac 路径就视为完成跨系统会话恢复。
 
 主要内容包括 `harness/`、`capture/`、`capture/research/`、`research-sdk/`、`runtime-settings.json` 和 `startup-diagnostics/`。研究项目、来源、实验、评估、报告和记忆索引都保存在 `capture/research/`。
 
@@ -242,7 +245,7 @@ npm run dist:win
 - 开放网页、摘要和 OCR 内容需要来源和正文审阅才能作为强证据。
 - token usage 缺失时记录为 unknown；模型预算不是精确费用封顶。
 - 自动计划、实验执行、报告和记忆检索都保留人工审阅边界。
-- 当前重点验证 Windows 开发版和本地恢复；升级兼容、系统级网络故障、Linux 实机和生产规模服务仍需独立验收。
+- Windows 已有安装包构建流程；macOS 可从源码开发，Mac 接续验证见[交接文档](docs/development-handoff-2026-11-03.md#mac-接续开发记录)。尚未配置 macOS 安装包、签名和公证。当前重点验证开发版和本地恢复；升级兼容、系统级网络故障、Linux 实机和生产规模服务仍需独立验收。
 
 详细协议和边界：
 

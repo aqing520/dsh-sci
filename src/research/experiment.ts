@@ -231,19 +231,31 @@ async function readBoundFile(target: string, workspaceRoot?: string, previewLimi
   } finally { await file.close(); }
 }
 
+// Outputs may not exist yet. Resolve their nearest existing ancestor as well,
+// so macOS /var aliases and symlinked parent directories share one boundary.
+async function canonicalManifestPath(target: string): Promise<string> {
+  try { return await realpath(target); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const parent = path.dirname(target);
+    if (parent === target) throw error;
+    return path.join(await canonicalManifestPath(parent), path.basename(target));
+  }
+}
+
 async function snapshotFiles(paths: string[], workspaceRoot?: string, baseDirectory?: string): Promise<ExperimentFileSnapshot[]> {
   const root = workspaceRoot ? path.resolve(await realpath(workspaceRoot)) : undefined;
   const base = baseDirectory ? path.resolve(baseDirectory) : process.cwd();
   const result: ExperimentFileSnapshot[] = [];
   const seen = new Set<string>();
   for (const value of paths) {
-    const target = path.resolve(base, value);
+    const target = await canonicalManifestPath(path.resolve(base, value));
     const key = process.platform === "win32" ? target.toLowerCase() : target;
     if (seen.has(key)) continue;
     seen.add(key);
     if (root) {
       const relative = path.relative(root, target);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("experiment manifest path must stay inside the workspace");
+      if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("experiment manifest path resolves outside the workspace; it must stay inside the workspace");
     }
     const relativePath = root ? path.relative(root, target) : target;
     try {

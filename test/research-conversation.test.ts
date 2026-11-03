@@ -8,7 +8,41 @@ import { ResearchOrchestrator } from "../src/research/orchestrator.js";
 import { ResearchConversations } from "../src/research/conversation.js";
 import { startResearchBridge } from "../src/research/bridge.js";
 // @ts-expect-error the Harness plugin is plain ESM.
-import { apply } from "../desktop/dsh-sci-research-plugin.mjs";
+import { apply, researchContextJson } from "../desktop/dsh-sci-research-plugin.mjs";
+
+test("large model context remains valid JSON and retains checkpoint, budget and conflict identities", () => {
+  const context = {
+    active: true, projectId: "project-original", taskId: "conversation", workspaceRoot: "/workspace",
+    project: { projectId: "project-original", planId: "plan-original", status: "paused", question: "Question ".repeat(5000), constraints: ["large optional constraint".repeat(2000)] },
+    task: { taskId: "conversation", kind: "conversation", status: "running", objective: "Finish comparison" },
+    checkpoint: { summary: "The result contradicts the original prediction. Next: check the saved citations.", at: "2026-11-03T00:00:00Z", refs: ["citation-kept"] },
+    budget: { usedModelRequests: 99, maxModelRequests: 100, reportedTotalTokens: 999900, maxModelTokens: 1000000, exhausted: "model-tokens" },
+    memory: [{ memoryId: "conflicted-memory", conflictStatus: "unresolved", text: "untrusted detail".repeat(3000) }],
+    recentEvidence: { claims: [{ claimId: "large-claim", text: "claim ".repeat(4000) }] },
+  };
+  const before = JSON.stringify(context);
+  const json = researchContextJson(context);
+  assert.ok(json.length <= 18000);
+  const result = JSON.parse(json);
+  assert.equal(result.projectId, context.projectId);
+  assert.equal(result.project.planId, context.project.planId);
+  assert.deepEqual(result.budget, context.budget);
+  assert.deepEqual(result.checkpoint, context.checkpoint);
+  assert.deepEqual(result.contextSummary.memoryConflicts, [{ memoryId: "conflicted-memory", conflictStatus: "unresolved" }]);
+  assert.equal(result.contextSummary.truncated, true);
+  assert.match(result.contextSummary.guidance, /research_inspect/);
+  assert.equal(JSON.stringify(context), before, "summarizing must not mutate the full context returned by tools");
+});
+
+test("context limits account for JSON escape expansion and leave short context unchanged", () => {
+  const short = { active: true, projectId: "small", checkpoint: { summary: "Next step", refs: [] } };
+  assert.equal(researchContextJson(short), JSON.stringify(short));
+  const escaped = { ...short, checkpoint: { summary: "\u0000".repeat(4000), refs: Array.from({ length: 100 }, (_, index) => `citation-${index}-${"a".repeat(100)}`) }, budget: { usedModelRequests: 4, maxModelRequests: 100, unknownUsageRequests: 2 } };
+  const json = researchContextJson(escaped);
+  assert.ok(json.length <= 18000);
+  assert.deepEqual(JSON.parse(json).budget, escaped.budget);
+  assert.ok(JSON.parse(json).contextSummary.shortenedFields.includes("checkpoint.summary"));
+});
 
 async function fixture(run: (f: any) => Promise<void>, encrypted = false) {
   const root = await mkdtemp(path.join(tmpdir(), "dsh-sci-conversation-"));

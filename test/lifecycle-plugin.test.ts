@@ -42,9 +42,11 @@ test("lifecycle assigns each session its own workspace snapshot rather than the 
 
 test("lifecycle plugin persists sanitized session events", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "dsh-sci-lifecycle-"));
+  const workspace = path.join(root, "workspace");
+  const resultFile = path.join(workspace, "result.csv");
   const previousRoot = process.env.DSH_SCI_CAPTURE_ROOT;
   process.env.DSH_SCI_CAPTURE_ROOT = root;
-  await writeFile(path.join(root, "workspace-index.json"), JSON.stringify({ projectId: "project-1", latest: "snapshot-1", workspaceRoot: "D:\\research", files: [{ path: "result.csv", kind: "file", bytes: 12, sha256: "abc123" }] }), "utf8");
+  await writeFile(path.join(root, "workspace-index.json"), JSON.stringify({ projectId: "project-1", latest: "snapshot-1", workspaceRoot: workspace, files: [{ path: "result.csv", kind: "file", bytes: 12, sha256: "abc123" }] }), "utf8");
   const listeners = new Map<string, (...args: any[]) => unknown>();
   let cleanup: (() => Promise<void>) | undefined;
   try {
@@ -53,13 +55,13 @@ test("lifecycle plugin persists sanitized session events", async () => {
       effect(factory: () => (() => Promise<void>)) { cleanup = factory(); },
       logger: { warn() {} },
     } as any);
-    const session = { id: "session-test", header: { cwd: "D:\\research", origin: "desktop" } };
+    const session = { id: "session-test", header: { cwd: workspace, origin: "desktop" } };
     listeners.get("session/created")!(session);
     listeners.get("session/event")!(session, {
       type: "tool/result",
       seq: 2,
       time: 123,
-       data: { token: "should-not-be-written", message: "ok", filePath: "D:\\research\\result.csv", toolCallId: "tool-123" },
+       data: { token: "should-not-be-written", message: "ok", filePath: resultFile, toolCallId: "tool-123" },
     });
     listeners.get("session/event")!(session, { type: "user/input", seq: 3, time: 124, data: { message: "question" } });
     listeners.get("session/event")!(session, { type: "assistant/output", seq: 4, time: 125, data: { message: "answer", responseId: "response-123", model: "gpt-test", provider: "test-provider" } });
@@ -78,12 +80,12 @@ test("lifecycle plugin persists sanitized session events", async () => {
     assert.equal(records.length, 6);
     assert.equal(records[0].type, "created");
     assert.equal(records[1].event.data.token, "[redacted]");
-     assert.deepEqual(records[1].event.observedPaths, ["D:\\research\\result.csv"]);
+     assert.deepEqual(records[1].event.observedPaths, [resultFile]);
     assert.equal(records[1].event.artifacts[0].relativePath, "result.csv");
     assert.equal(records[1].event.artifacts[0].bytes, 12);
     assert.equal(records[1].event.artifacts[0].sha256, "abc123");
     assert.equal(records[1].event.artifacts[0].location, "workspace");
-    assert.equal(artifactIndex.artifacts[0].path, "D:\\research\\result.csv");
+    assert.equal(artifactIndex.artifacts[0].path, resultFile);
     assert.equal(artifactIndex.artifacts[0].location, "workspace");
     assert.equal(records[2].classification, "input");
     assert.equal(records[3].classification, "output");
@@ -113,7 +115,7 @@ test("lifecycle plugin persists sanitized session events", async () => {
     assert.equal(records[1].classification, "tool");
     assert.deepEqual(records[1].event.correlations, [{ kind: "tool", id: "tool-123" }]);
      assert.equal(sessionIndex.toolAttribution, "partial");
-    const hostile = { id: "..", header: { cwd: "D:\\research", origin: "desktop" } };
+    const hostile = { id: "..", header: { cwd: workspace, origin: "desktop" } };
     listeners.get("session/created")!(hostile);
     await listeners.get("session/flush")!(hostile);
     const hostileIndex = JSON.parse(await readFile(path.join(root, "sessions", "%2E%2E", "session.json"), "utf8"));

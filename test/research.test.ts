@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildResearchPlan, defaultResearchPlanInput, readyTaskIds, transitionTask } from "../src/research/domain.js";
@@ -16,7 +16,7 @@ import { ResearchRunner } from "../src/research/runner.js";
 import { startDshSdkClient, DshResearchTaskExecutor } from "../src/research/dsh-sdk.js";
 import { checkIndependentNumericResult, evaluatePairedBootstrap, evaluateResearchMetrics, evaluateStatisticalMetric, makeResearchEvaluation } from "../src/research/evaluation.js";
 import { resolveResearchReference } from "../src/research/source-adapters.js";
-import { aggregateProcessTreeMemory, makeExperimentDefinition, processTreeMemoryBytes, runExperiment } from "../src/research/experiment.js";
+import { aggregateProcessTreeMemory, captureExperimentContent, makeExperimentDefinition, processTreeMemoryBytes, runExperiment } from "../src/research/experiment.js";
 import { createCommandOcrProvider, createHttpOcrProvider, createTesseractOcrProvider } from "../src/research/ocr.js";
 
 test("research plan validates dependencies, cycles, and ready tasks", () => {
@@ -323,8 +323,27 @@ test("experiment cancellation terminates the process tree and records cancelled 
   assert.equal(result.manifest.schema, "dsh-sci.experiment-manifest.v1");
 });
 
+test("experiment manifests accept workspace aliases and missing outputs but reject escaping parent links", async () => {
+  const parent = await mkdtemp(path.join(tmpdir(), "dsh-manifest-alias-"));
+  try {
+    const root = path.join(parent, "workspace"), alias = path.join(parent, "alias"), outside = path.join(parent, "outside");
+    await mkdir(root); await mkdir(outside);
+    await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+    await symlink(outside, path.join(root, "escape"), process.platform === "win32" ? "junction" : "dir");
+    await writeFile(path.join(root, "input.txt"), "actual input");
+    const definition = makeExperimentDefinition("project", { title: "alias output", command: process.execPath, args: ["-e", "require('node:fs').writeFileSync('result.txt','ok')"], cwd: alias, inputPaths: [path.join(alias, "input.txt")], outputPaths: ["result.txt"], timeoutMs: 5000 });
+    const captured = await captureExperimentContent(definition, { workspaceRoot: root });
+    assert.equal(captured.inputManifest[0].path, path.join(await realpath(root), "input.txt"));
+    const result = await runExperiment(definition, { policy: { workspaceRoot: root } });
+    assert.equal(result.state, "completed");
+    assert.equal(result.manifest.outputs[0].exists, true);
+    assert.equal(await readFile(path.join(root, "result.txt"), "utf8"), "ok");
+    await assert.rejects(captureExperimentContent({ ...definition, inputPaths: ["escape/missing.txt"] }, { workspaceRoot: alias }), /outside the workspace/);
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
 test("experiment resource monitor reports process-tree memory on supported hosts", async () => {
-  if (!["win32", "linux"].includes(process.platform)) return;
+  if (!["win32", "linux", "darwin"].includes(process.platform)) return;
   const bytes = await processTreeMemoryBytes(process.pid);
   assert.equal(typeof bytes, "number");
   assert.ok((bytes ?? 0) > 0);
@@ -337,7 +356,7 @@ test("process-tree memory aggregation handles Windows and Linux shaped rows", ()
 });
 
 test("experiment memory quota terminates a process tree and records the peak", async () => {
-  if (!["win32", "linux"].includes(process.platform)) return;
+  if (!["win32", "linux", "darwin"].includes(process.platform)) return;
   const definition = makeExperimentDefinition("project", { title: "memory quota", command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"], timeoutMs: 10_000 });
   const result = await runExperiment(definition, { policy: { maxMemoryBytes: 1 } });
   assert.equal(result.state, "failed");

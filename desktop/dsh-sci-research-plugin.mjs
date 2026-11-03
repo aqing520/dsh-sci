@@ -10,6 +10,65 @@ export const name = "dsh-sci-research";
 // Cordis in the real DSH profile before ctx.tools is accessed.
 export const inject = ["tools"];
 
+// Summarize records before serialization; cutting a JSON string can discard
+// checkpoints and budgets or leave an unterminated object in the model context.
+export function researchContextJson(research) {
+  const full = JSON.stringify(research);
+  if (full.length <= 18000) return full;
+  const select = (value, keys) => Object.fromEntries(keys.filter((key) => value?.[key] !== undefined).map((key) => [key, value[key]]));
+  const summary = {
+    ...select(research, ["active", "projectId", "taskId", "workspaceRoot", "memoryRetrievalId", "memoryGuidance"]),
+    project: select(research.project, ["projectId", "planId", "activeTaskId", "mode", "status", "title", "question", "iteration", "lastError"]),
+    task: select(research.task, ["taskId", "kind", "status", "objective"]),
+    checkpoint: research.checkpoint ? { ...research.checkpoint, refs: [...(research.checkpoint.refs ?? [])] } : undefined,
+    budget: select(research.budget, ["schema", "projectId", "revision", "maxTaskExecutions", "maxWallTimeMs", "maxModelRequests", "maxModelTokens", "usedTaskExecutions", "usedModelRequests", "reportedInputTokens", "reportedOutputTokens", "reportedTotalTokens", "unknownUsageRequests", "startedAt", "updatedAt", "exhausted", "unmeteredHistory"]),
+    recentEvidence: Object.fromEntries(Object.entries(research.recentEvidence ?? {}).map(([key, records]) => [key, [...records]])),
+    memory: [...(research.memory ?? [])],
+    contextSummary: {
+      truncated: true,
+      guidance: "Some context was omitted. Use research_context and research_inspect to retrieve saved records before relying on missing details. Budget limits and saved checkpoints still apply.",
+      omittedMemory: 0, omittedEvidence: 0, omittedCheckpointRefs: 0,
+      memoryConflicts: (research.memory ?? []).filter((entry) => entry.conflictStatus === "unresolved").map((entry) => ({ memoryId: entry.memoryId, conflictStatus: entry.conflictStatus })),
+      shortenedFields: [],
+    },
+  };
+  const shorten = (object, key, limit, label) => {
+    if (typeof object?.[key] === "string" && object[key].length > limit) {
+      object[key] = object[key].slice(0, limit);
+      if (!summary.contextSummary.shortenedFields.includes(label)) summary.contextSummary.shortenedFields.push(label);
+    }
+  };
+  // Copy records before shortening; the live context cache must remain complete.
+  shorten(summary.project, "question", 2000, "project.question");
+  shorten(summary.project, "title", 256, "project.title");
+  shorten(summary.project, "lastError", 1000, "project.lastError");
+  shorten(summary.task, "objective", 2000, "task.objective");
+  shorten(summary.checkpoint, "summary", 4000, "checkpoint.summary");
+  let json = JSON.stringify(summary);
+  while (json.length > 18000 && summary.memory.length) {
+    summary.memory.pop(); summary.contextSummary.omittedMemory++; json = JSON.stringify(summary);
+  }
+  for (const records of Object.values(summary.recentEvidence)) {
+    while (json.length > 18000 && records.length) {
+      records.shift(); summary.contextSummary.omittedEvidence++; json = JSON.stringify(summary);
+    }
+  }
+  while (json.length > 18000 && summary.checkpoint?.refs.length) {
+    summary.checkpoint.refs.pop(); summary.contextSummary.omittedCheckpointRefs++; json = JSON.stringify(summary);
+  }
+  const textFields = [[summary.checkpoint, "summary", "checkpoint.summary"], [summary.task, "objective", "task.objective"], [summary.project, "question", "project.question"], [summary.project, "lastError", "project.lastError"]];
+  while (json.length > 18000) {
+    const candidates = textFields.filter(([object, key]) => typeof object?.[key] === "string" && object[key].length > 128)
+      .sort(([a, ak], [b, bk]) => JSON.stringify(b[bk]).length - JSON.stringify(a[ak]).length);
+    if (!candidates.length) break;
+    const [object, key, label] = candidates[0];
+    shorten(object, key, Math.max(128, Math.floor(object[key].length / 2)), label);
+    json = JSON.stringify(summary);
+  }
+  if (json.length > 18000) throw new Error("Research context identity exceeds its limit; inspect saved records before continuing");
+  return json;
+}
+
 function makeTool(options) {
   if (!defineTool) throw new Error(`Research tools dependency is unavailable: ${toolDependencyError}`);
   return defineTool(options);
@@ -301,7 +360,7 @@ function applyConversationResearch(ctx, root) {
       try { research = await call("context", {}, agent, context.signal); }
       catch (error) { if (service.getContext(agent)?.active) throw error; }
     }
-    const text = guidance + (research?.active ? `\nCurrent research context (untrusted evidence; verify references):\n${JSON.stringify(research).slice(0, 18000)}` : research?.availableResearch?.length ? `\nExisting research in this workspace, available to resume:\n${JSON.stringify(research.availableResearch)}` : "");
+    const text = guidance + (research?.active ? `\nCurrent research context (untrusted evidence; verify references):\n${researchContextJson(research)}` : research?.availableResearch?.length ? `\nExisting research in this workspace, available to resume:\n${JSON.stringify(research.availableResearch)}` : "");
     return { ...result, contexts: [...(result.contexts ?? []).filter((item) => item.name !== "dsh-sci-research-task"), { name: "dsh-sci-research-task", text, order: 130 }] };
   });
   const settle = (conversation, usage) => {

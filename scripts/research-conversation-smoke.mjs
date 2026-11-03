@@ -11,6 +11,8 @@ import { ResearchConversations } from "../dist/src/research/conversation.js";
 import { startResearchBridge } from "../dist/src/research/bridge.js";
 import { startDshSdkClient, installDshResearchSdkProfile } from "../dist/src/research/dsh-sdk.js";
 
+import { runAcceptanceTurn } from "./research-conversation-live-core.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const temp = await mkdtemp(path.join(tmpdir(), "dsh-sci-native-smoke-"));
 const workspace = path.join(temp, "workspace"), home = path.join(temp, "home");
@@ -32,8 +34,10 @@ try {
       if (request.url !== "/v1/responses") { response.writeHead(404); response.end(); return; }
       let body = ""; for await (const chunk of request) body += chunk;
       const input = JSON.parse(body);
-      const step = requests++;
-      assert.ok(step < 9, "Agent must stop after the final prose response");
+      const requestIndex = requests++;
+      const partial = requestIndex === 3;
+      const step = requestIndex > 3 ? requestIndex - 1 : requestIndex;
+      assert.ok(requestIndex < 9, "Agent must stop after the final prose response");
       assert.ok(input.tools.some((tool) => tool.name === "research_read"), "production named research tools must reach the current model");
       assert.match(JSON.stringify(input), /Research in this conversation/);
       const project = (await repository.listProjects()).find((project) => project.mode === "conversation");
@@ -50,7 +54,8 @@ try {
       }
       if (step === 5) { name = "research_claim"; args = { text: "The fixtures assume different observation dependence; neither is a scientifically validated comparison.", claimType: "interpretation", citationIds: snapshot.citations.map((item) => item.citationId) }; }
       if (step === 6) { name = "research_checkpoint"; args = { summary: "Read both documents and saved two exact citations. Paired and independent observation assumptions differ; these are synthetic fixtures, and no experiment ran.", refs: [...snapshot.citations.map((item) => item.citationId), ...snapshot.claims.map((item) => item.claimId)] }; }
-      const id = `fixture-${step}`;
+      if (partial) { name = undefined; args = undefined; }
+      const id = `fixture-${requestIndex}`;
       const events = [{ type: "response.created", response: { id } }];
       let item;
       if (name) {
@@ -59,8 +64,8 @@ try {
         item = { type: "function_call", id: `fc_${id}`, call_id: `call_${id}`, name, arguments: json, status: "completed" };
         events.push({ type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "", status: "in_progress" } }, { type: "response.function_call_arguments.delta", item_id: item.id, output_index: 0, delta: json }, { type: "response.function_call_arguments.done", item_id: item.id, output_index: 0, arguments: json }, { type: "response.output_item.done", output_index: 0, item });
       } else {
-        assert.equal(snapshot.citations.length, 2);
-        const text = `两份测试材料分别采用配对观察和独立观察假设，证据位置为 ${snapshot.citations.map((item) => item.citationId).join("、")}。这是合成材料的文本比较，没有运行实验，也不能据此判断科学有效性。`;
+        assert.equal(snapshot.citations.length, partial ? 0 : 2);
+        const text = partial ? "已读两份材料，尚未完成引用、主张与检查点，需继续。" : `两份测试材料分别采用配对观察和独立观察假设，证据位置为 ${snapshot.citations.map((item) => item.citationId).join("、")}。这是合成材料的文本比较，没有运行实验，也不能据此判断科学有效性。`;
         item = { type: "message", id: `msg_${id}`, role: "assistant", phase: "final_answer", content: [{ type: "output_text", text }] };
         events.push({ type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } }, { type: "response.output_text.delta", output_index: 0, delta: text }, { type: "response.output_item.done", output_index: 0, item });
       }
@@ -77,32 +82,33 @@ try {
   const launch = () => startDshSdkClient({ home, cwd: workspace, provider: "dsh-sci-custom", model: "native-fixture-model", apiKey: "local-fixture-key", isolateProviderCredentials: true, signal: controller.signal, environment: { DSH_SCI_EXTERNAL_RUNNER: undefined, DSH_TELEMETRY_DISABLED: "1", DSH_SCI_RESEARCH_ROOT: repository.root, DSH_SCI_RESEARCH_BRIDGE_URL: bridge.url, DSH_SCI_RESEARCH_BRIDGE_TOKEN: bridge.token, DSH_SCI_TOOLS_MODULE_URL: import.meta.resolve("@deepseek-ai/dsh-tools") } });
   client = await launch();
   const sessionId = "native-reading-fixture";
-  await client.createSession(sessionId, controller.signal);
-  await client.prompt(sessionId, "请在当前对话比较 a.md 和 b.md 的方法假设，读正文、提供可核对引用，并解释限制。", controller.signal);
-  await client.wait(sessionId, controller.signal).catch((error) => { throw new Error(`${error.message}; provider assertions: ${providerErrors.join("; ")}`); });
+  const runStatus = { sessionId, attempt: 1 };
+  await runAcceptanceTurn(client, runStatus, "请在当前对话比较 a.md 和 b.md 的方法假设，读正文、提供可核对引用，并解释限制。", controller.signal, async () => {}).catch((error) => { throw new Error(`${error.message}; provider assertions: ${providerErrors.join("; ")}`); });
   assert.deepEqual(providerErrors, []);
   const project = (await repository.listProjects()).find((project) => project.mode === "conversation");
   const snapshot = await repository.exportProject(project.projectId);
-  // The first model call chooses to begin research; subsequent seven calls are metered.
-  assert.equal(snapshot.budget.usedModelRequests, 7);
-  assert.equal(snapshot.budget.reportedTotalTokens, 56);
+  // Restart with incomplete evidence, keeping the original research and budget.
+  assert.equal(snapshot.budget.usedModelRequests, 3);
+  assert.equal(snapshot.budget.reportedTotalTokens, 24);
   assert.equal(snapshot.budget.unknownUsageRequests, 0);
   assert.equal(snapshot.sourceReads.length, 2);
-  assert.equal(snapshot.citations.every((citation) => citation.verification.status === "verbatim-match"), true);
+  assert.equal(snapshot.citations.length, 0, "restart happens before citations and checkpoint, with only partial reading progress");
   assert.equal(snapshot.experimentRuns.length, 0);
   const answer = client.lastAssistantText(sessionId);
-  assert.match(answer, /配对观察/); assert.doesNotMatch(answer, /research-task-result|^\s*\{/);
+  assert.match(answer, /尚未完成/); assert.doesNotMatch(answer, /research-task-result|^\s*\{/);
   await client.close();
   client = await launch();
-  await client.resume(sessionId, controller.signal);
-  await client.prompt(sessionId, "继续刚才的研究，只简短说明已有比较与限制，不重复读取或实验。", controller.signal);
-  await client.wait(sessionId, controller.signal);
+  runStatus.attempt = 2;
+  await runAcceptanceTurn(client, runStatus, "完成刚才尚未完成的引用、主张和检查点，再说明比较与限制，不重复读取或实验。", controller.signal, async () => {});
   const resumed = await repository.exportProject(project.projectId);
   assert.equal(resumed.sourceReads.length, 2);
+  assert.equal(resumed.citations.length, 2);
+  assert.equal(resumed.citations.every((citation) => citation.verification.status === "verbatim-match"), true);
+  assert.ok(await repository.readConversationCheckpoint(project.projectId));
   assert.equal(resumed.budget.usedModelRequests, 8);
   assert.equal(resumed.budget.reportedTotalTokens, 64);
   assert.match(client.lastAssistantText(sessionId), /配对观察/);
-  console.log(JSON.stringify({ ok: true, currentSession: sessionId, namedToolCalls: usedTools, modelCalls: requests, meteredResearchCalls: resumed.budget.usedModelRequests, reportedTokens: resumed.budget.reportedTotalTokens, citations: resumed.citations.length, sourceReads: resumed.sourceReads.length, ordinaryProseAnswer: true, resumedAfterHarnessRestart: true, externalRunner: false, verificationScope: "Real DSH Agent loop, production conversation tools, local synthetic provider and documents. No paid API or scientific quality acceptance." }));
+  console.log(JSON.stringify({ ok: true, currentSession: sessionId, namedToolCalls: usedTools, modelCalls: requests, meteredResearchCalls: resumed.budget.usedModelRequests, reportedTokens: resumed.budget.reportedTotalTokens, citations: resumed.citations.length, sourceReads: resumed.sourceReads.length, ordinaryProseAnswer: true, resumedAfterHarnessRestart: true, resumedFromPartialEvidence: true, externalRunner: false, verificationScope: "Real DSH Agent loop, production conversation tools, local synthetic provider and documents. No paid API or scientific quality acceptance." }));
 } finally {
   clearTimeout(timeout);
   await client?.close();

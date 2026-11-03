@@ -31,6 +31,8 @@ import { assertCompatibleResearchStore } from "./store-format.js";
 const INDEX_FILE = "index.json";
 // One desktop writer; share the queue across Repository instances in this process.
 const budgetWrites = new Map<string, Promise<unknown>>();
+const projectFileWrites = new Map<string, Promise<unknown>>();
+const indexWrites = new Map<string, Promise<unknown>>();
 const eventWrites = new Map<string, Promise<void>>();
 const securityAuditWrites = new Map<string, Promise<void>>();
 const securityAuditWindows = new Map<string, { startedAt: number; count: number; suppressed: number }>();
@@ -79,14 +81,34 @@ export class ResearchRepository {
   async init(): Promise<void> { await this.assertCompatible(); if (this.initialized) return; await mkdir(path.join(this.root, "projects"), { recursive: true }); this.initialized = true; }
 
   async saveProject(project: ResearchProject): Promise<void> { await this.writeJson(path.join("projects", segment(project.projectId), "project.json"), project); await this.updateIndex(project); }
-  async readProject(projectId: string): Promise<ResearchProject | undefined> { return this.readOptionalJson<ResearchProject>(path.join("projects", segment(projectId), "project.json")); }
+  private async isDeleted(projectId: string): Promise<boolean> { return Boolean(await this.readOptionalJson(path.join("deleted-projects", `${segment(projectId)}.json`))); }
+  private queueWrite<T>(queue: Map<string, Promise<unknown>>, key: string, operation: () => Promise<T>): Promise<T> {
+    const next = (queue.get(key) ?? Promise.resolve()).catch(() => undefined).then(operation);
+    queue.set(key, next);
+    void next.finally(() => { if (queue.get(key) === next) queue.delete(key); }).catch(() => undefined);
+    return next;
+  }
+  private projectWrite<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
+    return this.queueWrite(projectFileWrites, path.join(this.root, "projects", segment(projectId)), operation);
+  }
+  private async assertNotDeleted(projectId: string): Promise<void> {
+    if (await this.isDeleted(projectId)) throw new Error("Research project was deleted; late writes are rejected");
+  }
+  async readProject(projectId: string): Promise<ResearchProject | undefined> {
+    if (await this.isDeleted(projectId)) return undefined;
+    return this.readOptionalJson<ResearchProject>(path.join("projects", segment(projectId), "project.json"));
+  }
   async readConversationBinding(key: string): Promise<ResearchConversationBinding | undefined> {
     if (!/^[a-f0-9]{64}$/u.test(key)) throw new Error("Invalid research conversation key");
-    return this.readOptionalJson<ResearchConversationBinding>(path.join("conversations", `${key}.json`));
+    const binding = await this.readOptionalJson<ResearchConversationBinding>(path.join("conversations", `${key}.json`));
+    return binding && !await this.readProject(binding.projectId) ? undefined : binding;
   }
   async saveConversationBinding(key: string, binding: ResearchConversationBinding): Promise<void> {
     if (!/^[a-f0-9]{64}$/u.test(key)) throw new Error("Invalid research conversation key");
-    await this.writeJson(path.join("conversations", `${key}.json`), binding);
+    await this.projectWrite(binding.projectId, async () => {
+      await this.assertNotDeleted(binding.projectId);
+      await this.writeJson(path.join("conversations", `${key}.json`), binding);
+    });
   }
   async readConversationCheckpoint(projectId: string): Promise<ResearchConversationBinding["checkpoint"]> {
     return this.readOptionalJson<NonNullable<ResearchConversationBinding["checkpoint"]>>(path.join("projects", segment(projectId), "conversation-checkpoint.json"));
@@ -95,17 +117,35 @@ export class ResearchRepository {
     await this.writeJson(path.join("projects", segment(projectId), "conversation-checkpoint.json"), checkpoint);
   }
   async deleteProject(projectId: string): Promise<{ deleted: boolean; projectId: string }> {
-    await this.init();
     const id = String(projectId ?? "").trim();
     if (!id) throw new Error("research project ID is required");
-    const existing = await this.readProject(id);
-    if (!existing) throw new Error(`research project not found: ${id}`);
-    const active = await this.readActiveContext();
-    if (active?.projectId === id) await this.clearActiveContext();
-    await rm(path.join(this.root, "projects", segment(id)), { recursive: true, force: true });
-    const projects = (await this.listProjects(10_000)).filter((item) => item.projectId !== id);
-    await this.writeJson(INDEX_FILE, { schema: "dsh-sci.research-project-index.v1", projects: projects.reverse().sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).slice(-10_000) });
-    return { deleted: true, projectId: id };
+    return this.projectWrite(id, async () => {
+      await this.init();
+      const deleted = await this.isDeleted(id);
+      if (!deleted && !await this.readProject(id)) throw new Error(`research project not found: ${id}`);
+      const budget = await this.readBudget(id);
+      if (budget?.schema === "dsh-sci.research-budget.v2" && budget.modelRequests.some((item) => item.status === "reserved")) throw new Error("Wait for pending model requests to settle before deleting the project");
+      if ((await this.listExperimentRuns(id)).some((run) => run.state === "running")) throw new Error("Cancel or recover running experiments before deleting the project");
+      if (await this.hasPendingPlanCommit(id) || await this.hasPendingResultCommit(id)) throw new Error("Recover pending research commits before deleting the project");
+      // Durable marker precedes removal. Delayed tool/usage writes cannot
+      // recreate the project, including after a crash or Harness restart.
+      if (!deleted) await this.writeJson(path.join("deleted-projects", `${segment(id)}.json`), { schema: "dsh-sci.deleted-project.v1", projectId: id, deletedAt: new Date().toISOString() });
+      const active = await this.readOptionalJson<{ projectId: string }>("active-context.json");
+      if (active?.projectId === id) await this.clearActiveContext();
+      let entries: string[];
+      try { entries = await readdir(path.join(this.root, "conversations")); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; entries = []; }
+      for (const name of entries.filter((name) => /^[a-f0-9]{64}\.json$/u.test(name))) {
+        const binding = await this.readOptionalJson<ResearchConversationBinding>(path.join("conversations", name));
+        if (binding?.projectId === id) await rm(path.join(this.root, "conversations", name), { force: true });
+      }
+      await rm(path.join(this.root, "projects", segment(id)), { recursive: true, force: true });
+      await this.queueWrite(indexWrites, this.root, async () => {
+        const projects = (await this.listProjects(10_000)).filter((item) => item.projectId !== id);
+        await this.writeJson(INDEX_FILE, { schema: "dsh-sci.research-project-index.v1", projects: projects.reverse() });
+      });
+      return { deleted: true, projectId: id };
+    });
   }
   async readBudget(projectId: string): Promise<ResearchBudget | undefined> {
     const budget = await this.readOptionalJson<unknown>(path.join("projects", segment(projectId), "budget.json"));
@@ -398,8 +438,16 @@ export class ResearchRepository {
     if (!old) await this.writeJson(path.join("memory-retrievals", `${segment(record.retrievalId)}.json`), record);
   }
   async listMemoryRetrievals(limit = 1000): Promise<MemoryRetrievalRecord[]> { return (await this.listRootEntities<MemoryRetrievalRecord>("memory-retrievals")).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.retrievalId.localeCompare(b.retrievalId)).slice(-limit); }
-  async saveActiveContext(context: { projectId: string; taskId: string; planId?: string }): Promise<void> { await this.writeJson("active-context.json", { schema: "dsh-sci.research-active-context.v1", ...context, updatedAt: new Date().toISOString() }); }
-  async readActiveContext(): Promise<{ projectId: string; taskId: string; planId?: string } | undefined> { return this.readOptionalJson<{ projectId: string; taskId: string; planId?: string }>("active-context.json"); }
+  async saveActiveContext(context: { projectId: string; taskId: string; planId?: string }): Promise<void> {
+    await this.projectWrite(context.projectId, async () => {
+      await this.assertNotDeleted(context.projectId);
+      await this.writeJson("active-context.json", { schema: "dsh-sci.research-active-context.v1", ...context, updatedAt: new Date().toISOString() });
+    });
+  }
+  async readActiveContext(): Promise<{ projectId: string; taskId: string; planId?: string } | undefined> {
+    const context = await this.readOptionalJson<{ projectId: string; taskId: string; planId?: string }>("active-context.json");
+    return context && await this.isDeleted(context.projectId) ? undefined : context;
+  }
   async clearActiveContext(): Promise<void> { await this.assertCompatible(); try { await unlink(path.join(this.root, "active-context.json")); } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
   async saveAgentSession(projectId: string, sessionId: string, planId?: string): Promise<void> { await this.writeJson(path.join("projects", segment(projectId), ...(planId === undefined ? ["agent-session.json"] : ["agent-sessions", `${segment(planId)}.json`])), { sessionId }); }
   async readAgentSession(projectId: string, planId?: string): Promise<{ sessionId: string } | undefined> { return this.readOptionalJson<{ sessionId: string }>(path.join("projects", segment(projectId), ...(planId === undefined ? ["agent-session.json"] : ["agent-sessions", `${segment(planId)}.json`]))); }
@@ -413,7 +461,6 @@ export class ResearchRepository {
   private async appendEventInternal(event: ResearchEvent): Promise<void> {
     await this.init();
     const file = path.join("projects", segment(event.projectId), "events.jsonl");
-    await mkdir(path.join(this.root, path.dirname(file)), { recursive: true });
     let previous = "";
     try { previous = await this.readText(file); } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     for (const line of previous.split(/\r?\n/u).filter(Boolean)) if (JSON.parse(line).eventId === event.eventId) return;
@@ -454,7 +501,11 @@ export class ResearchRepository {
     catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   }
   async listProjects(limit = 100): Promise<ResearchProject[]> {
-    try { const value = await this.readJson<{ projects?: ResearchProject[] }>(INDEX_FILE); return (value.projects ?? []).slice(-Math.max(1, limit)).reverse(); }
+    try {
+      const value = await this.readJson<{ projects?: ResearchProject[] }>(INDEX_FILE);
+      const visible = await Promise.all((value.projects ?? []).map(async (project) => await this.isDeleted(project.projectId) ? undefined : project));
+      return visible.filter((project): project is ResearchProject => Boolean(project)).slice(-Math.max(1, limit)).reverse();
+    }
     catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       await this.init();
@@ -507,8 +558,11 @@ export class ResearchRepository {
   }
 
   private async updateIndex(project: ResearchProject): Promise<void> {
-    const projects = (await this.listProjects(10_000)).filter((item) => item.projectId !== project.projectId);
-    await this.writeJson(INDEX_FILE, { schema: "dsh-sci.research-project-index.v1", projects: [...projects.reverse(), project].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).slice(-10_000) });
+    await this.queueWrite(indexWrites, this.root, async () => {
+      await this.assertNotDeleted(project.projectId);
+      const projects = (await this.listProjects(10_000)).filter((item) => item.projectId !== project.projectId);
+      await this.writeJson(INDEX_FILE, { schema: "dsh-sci.research-project-index.v1", projects: [...projects.reverse(), project].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).slice(-10_000) });
+    });
   }
   private async writeJson(relative: string, value: unknown): Promise<void> {
     // serializeMetadataJson already applies the metadata envelope. Do not pass
@@ -523,6 +577,17 @@ export class ResearchRepository {
     await this.writeRawText(relative, this.metadataPassphrase ? encryptMetadataText(value, this.metadataPassphrase) : value);
   }
   private async writeRawText(relative: string, value: string): Promise<void> {
+    const parts = relative.split(path.sep);
+    if (parts[0] === "projects" && parts[1]) {
+      const projectId = decodeURIComponent(parts[1]);
+      return this.projectWrite(projectId, async () => {
+        await this.assertNotDeleted(projectId);
+        await this.writeRawTextUnchecked(relative, value);
+      });
+    }
+    await this.writeRawTextUnchecked(relative, value);
+  }
+  private async writeRawTextUnchecked(relative: string, value: string): Promise<void> {
     await this.init();
     const target = path.join(this.root, relative);
     await mkdir(path.dirname(target), { recursive: true });
