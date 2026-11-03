@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, writeFile, unlink } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { metadataPassphraseFromEnvironment, parseMetadataJson, serializeMetadataJson } from "../metadata-crypto.js";
@@ -93,6 +93,19 @@ export class ResearchRepository {
   }
   async saveConversationCheckpoint(projectId: string, checkpoint: NonNullable<ResearchConversationBinding["checkpoint"]>): Promise<void> {
     await this.writeJson(path.join("projects", segment(projectId), "conversation-checkpoint.json"), checkpoint);
+  }
+  async deleteProject(projectId: string): Promise<{ deleted: boolean; projectId: string }> {
+    await this.init();
+    const id = String(projectId ?? "").trim();
+    if (!id) throw new Error("research project ID is required");
+    const existing = await this.readProject(id);
+    if (!existing) throw new Error(`research project not found: ${id}`);
+    const active = await this.readActiveContext();
+    if (active?.projectId === id) await this.clearActiveContext();
+    await rm(path.join(this.root, "projects", segment(id)), { recursive: true, force: true });
+    const projects = (await this.listProjects(10_000)).filter((item) => item.projectId !== id);
+    await this.writeJson(INDEX_FILE, { schema: "dsh-sci.research-project-index.v1", projects: projects.reverse().sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).slice(-10_000) });
+    return { deleted: true, projectId: id };
   }
   async readBudget(projectId: string): Promise<ResearchBudget | undefined> {
     const budget = await this.readOptionalJson<unknown>(path.join("projects", segment(projectId), "budget.json"));
