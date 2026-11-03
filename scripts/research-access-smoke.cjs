@@ -9,10 +9,10 @@ const { setTimeout: delay } = require("node:timers/promises");
 
 const projectRoot = path.resolve(__dirname, "..");
 let temp, passed = false;
-const result = { schema: "dsh-sci.research-access-smoke.v1", startedAt: new Date().toISOString(), platform: process.platform, scientificQuality: "not-reviewed; synthetic access fixture" };
+const result = { schema: "dsh-sci.research-access-smoke.v1", startedAt: new Date().toISOString(), platform: process.platform, scientificQuality: "not-reviewed; synthetic access fixture", stage: "startup" };
 const outputIndex = process.argv.indexOf("--out"), outputPath = outputIndex >= 0 ? path.resolve(process.argv[outputIndex + 1]) : undefined;
 const deadline = Date.now() + 90_000;
-async function waitFor(operation) { while (Date.now() < deadline) { const value = await operation(); if (value) return value; await delay(50); } throw new Error("Production Research Workspace access smoke timed out"); }
+async function waitFor(operation) { while (Date.now() < deadline) { const value = await operation(); if (value) return value; await delay(50); } throw new Error(`Production Research Workspace access smoke timed out during ${result.stage}`); }
 
 (async () => {
   temp = await fs.mkdtemp(path.join(os.tmpdir(), "dsh-sci-access-main-"));
@@ -26,6 +26,7 @@ async function waitFor(operation) { while (Date.now() < deadline) { const value 
   await app.whenReady();
   await import(pathToFileURL(path.join(projectRoot, "desktop/main.mjs")));
   await waitFor(() => Menu.getApplicationMenu()?.items[0]?.label === "dsh-sci");
+  result.stage = "owner-window";
   const menu = Menu.getApplicationMenu().items[0].submenu;
   await menu.items.find((item) => item.label === "Research Workspace").click();
   const owner = await waitFor(async () => { for (const window of BrowserWindow.getAllWindows()) if (await window.webContents.executeJavaScript("Boolean(window.researchApi && document.getElementById('create'))").catch(() => false)) return window; });
@@ -43,6 +44,7 @@ async function waitFor(operation) { while (Date.now() < deadline) { const value 
   })()`);
   const readSnapshot = () => owner.webContents.executeJavaScript(`researchApi.exportProject(${JSON.stringify(fixture.projectId)})`);
   const before = await readSnapshot();
+  result.stage = "readonly-window";
   await owner.webContents.executeJavaScript("researchApi.openReadOnly()");
   const reader = await waitFor(async () => { for (const window of BrowserWindow.getAllWindows()) if (window !== owner && await window.webContents.executeJavaScript("document.documentElement.dataset.researchAccess === 'read-only' && Boolean(window.researchApi)").catch(() => false)) return window; });
   assert.equal(await reader.webContents.executeJavaScript("Boolean(document.getElementById('create'))"), false);
@@ -74,6 +76,7 @@ async function waitFor(operation) { while (Date.now() < deadline) { const value 
   })()`);
   assert.equal(reads.projectId, fixture.projectId); assert.equal(reads.reportId, fixture.reportId); assert.equal(reads.preview.preview, true);
   assert.equal(reads.preview.chunks.length, 1); assert.equal(reads.budgetProjectId, fixture.projectId);
+  result.stage = "source-preview";
   await reader.webContents.executeJavaScript("document.querySelector('[data-action=sources]').click()");
   await waitFor(() => reader.webContents.executeJavaScript("[...document.querySelectorAll('.output button')].some(button=>button.textContent==='预览正文')"));
   await reader.webContents.executeJavaScript("[...document.querySelectorAll('.output button')].find(button=>button.textContent==='预览正文').click()");
@@ -117,6 +120,7 @@ async function waitFor(operation) { while (Date.now() < deadline) { const value 
     clearTimeout(shutdownTimer);
     Object.assign(result, { ok:passed, normalShutdown:true, finishedAt:new Date().toISOString() });
     save();
+    process.exitCode = passed ? 0 : 1;
     // Leave the isolated profile for diagnostics; files can remain locked until Electron exits.
   });
   app.quit();

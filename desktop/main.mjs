@@ -646,12 +646,12 @@ app.whenReady().then(async () => {
   if (!ownsInstance) return;
   markStartupStarted();
   installStartupIpc();
-  installApplicationMenu();
   createWindow(loadingScreenUrl());
   try {
     await verifyOptionalIntegrity();
     const url = await startOfficialHarness();
     installCaptureIpc();
+    installApplicationMenu();
     createWindow(url);
   } catch (error) {
     console.error("Official dsh Harness could not start:", error);

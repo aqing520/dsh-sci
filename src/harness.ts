@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { createServer } from "node:net";
 import { spawnOwnedProcess } from "./owned-process.js";
 
 export interface HarnessLaunchOptions {
@@ -108,36 +109,51 @@ async function waitForUrl(child: ChildProcessWithoutNullStreams, timeoutMs: numb
   }
 }
 
+function reserveLoopbackPort(): Promise<{ port: number; release: () => Promise<void> }> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 0 }, () => {
+      const address = server.address();
+      if (!address || typeof address === "string") { server.close(); reject(new Error("Could not reserve a loopback port")); return; }
+      resolve({ port: address.port, release: () => new Promise((closeResolve, closeReject) => server.close((error) => error ? closeReject(error) : closeResolve())) });
+    });
+  });
+}
+
+async function startWithReservedPort(options: HarnessLaunchOptions, command: string, argsPrefix: string[]): Promise<{ url: string; process: ChildProcessWithoutNullStreams; args: string[] }> {
+  const reservation = options.webPort === undefined || options.webPort === 0 ? await reserveLoopbackPort() : undefined;
+  const port = reservation?.port ?? options.webPort!;
+  // The child must own the listener before it can report readiness.
+  await reservation?.release();
+  const args = [...argsPrefix, "web", "--no-open", "--port", String(port)];
+  const child = spawnDsh(options, command, args);
+  try {
+    const url = await waitForUrl(child, options.startupTimeoutMs ?? DEFAULT_TIMEOUT_MS);
+    return { url, process: child, args };
+  } catch (error) {
+    child.kill();
+    throw error;
+  }
+}
+
 /** Start the official dsh Web profile and wait for its authenticated URL. */
 export async function startHarness(options: HarnessLaunchOptions): Promise<HarnessLaunchResult> {
   const resolved = resolveHarnessCommand(options.command);
   const version = options.version ?? DEFAULT_VERSION;
-  const args = [...(options.argsPrefix ?? resolved.argsPrefix), "web", "--no-open", ...(options.webPort === undefined ? [] : ["--port", String(options.webPort)])];
-  let child!: ChildProcessWithoutNullStreams;
   try {
-    child = spawnDsh(options, resolved.command, args);
-    const url = await waitForUrl(child, options.startupTimeoutMs ?? DEFAULT_TIMEOUT_MS);
-    return { url, command: resolved.command, args, process: child };
+    const result = await startWithReservedPort(options, resolved.command, options.argsPrefix ?? resolved.argsPrefix);
+    return { url: result.url, command: resolved.command, args: result.args, process: result.process };
   } catch (error) {
-    child?.kill();
     if (options.command) throw error;
     const fallbackCommand = process.platform === "win32" ? "npx.cmd" : "npx";
-    const fallbackArgs = ["--yes", `@deepseek-ai/dsh@${version}`, ...args];
-    child = spawnDsh(options, fallbackCommand, fallbackArgs);
+    const fallbackPrefix = ["--yes", `@deepseek-ai/dsh@${version}`];
     try {
-      const url = await waitForUrl(child, options.startupTimeoutMs ?? DEFAULT_TIMEOUT_MS);
-      return { url, command: fallbackCommand, args: fallbackArgs, process: child };
+      const result = await startWithReservedPort(options, fallbackCommand, fallbackPrefix);
+      return { url: result.url, command: fallbackCommand, args: result.args, process: result.process };
     } catch (startupError) {
-      child.kill();
       throw startupError;
     }
-  }
-  try {
-    const url = await waitForUrl(child, options.startupTimeoutMs ?? DEFAULT_TIMEOUT_MS);
-    return { url, command: resolved.command, args, process: child };
-  } catch (startupError) {
-    child.kill();
-    throw startupError;
   }
 }
 

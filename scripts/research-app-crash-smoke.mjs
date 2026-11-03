@@ -17,7 +17,7 @@ const exec = promisify(execFile);
 let current;
 let descendants = [];
 let ok = false;
-const report = { schema: "dsh-sci.app-crash-smoke.v1", startedAt: new Date().toISOString(), platform: process.platform };
+const report = { schema: "dsh-sci.app-crash-smoke.v1", startedAt: new Date().toISOString(), platform: process.platform, stage: "startup" };
 
 async function waitFor(operation, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
@@ -26,7 +26,7 @@ async function waitFor(operation, timeoutMs = 60_000) {
     if (result) return result;
     await delay(75);
   }
-  throw new Error("Whole-app crash smoke observation timed out");
+  throw new Error(`Whole-app crash smoke observation timed out during ${report.stage}`);
 }
 async function json(file) { try { return JSON.parse(await readFile(file, "utf8")); } catch (error) { if (error.code === "ENOENT" || error instanceof SyntaxError) return undefined; throw error; } }
 function isAlive(pid) { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === "ESRCH") return false; throw error; } }
@@ -56,12 +56,14 @@ try {
   await mkdir(workspace, { recursive: true });
   current = launch("start");
   const first = current;
+  report.stage = "fixture-pids";
   const pids = await waitFor(async () => {
     if (first.exitCode !== null || first.signalCode !== null) throw new Error("Application exited before launching the fixture experiment");
     return json(path.join(workspace, "pids.json"));
   });
   const fixture = await json(path.join(temp, "fixture.json"));
   const repository = new ResearchRepository(path.join(temp, "user-data", "capture", "research"));
+  report.stage = "experiment-running";
   await waitFor(async () => (await repository.listExperimentRuns(fixture.projectId)).some((run) => run.state === "running" && run.processId));
   descendants = await processTree(first.pid);
   assert.ok(descendants.includes(pids.command) && descendants.includes(pids.grandchild));
@@ -70,9 +72,11 @@ try {
   // killing the whole tree here would hide an application-lifetime bug.
   first.kill("SIGKILL");
   await waitFor(() => first.exitCode !== null || first.signalCode !== null, 10_000);
+  report.stage = "descendants-cleanup";
   await waitFor(() => descendants.every((pid) => !isAlive(pid)), 15_000);
   report.crashedDescendantsCleaned = descendants.length;
   assert.equal(await readFile(path.join(workspace, "attempts.txt"), "utf8"), "one\n");
+  report.stage = "recovery-file";
   current = launch("recover");
   await waitFor(async () => {
     const result = await json(path.join(temp, "recovered.json"));
