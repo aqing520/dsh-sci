@@ -54,6 +54,8 @@ native 实验要求保存的设计和代码 bundle、完整静态审查且无 bl
 
 后续增量：已在官方 keyed toolview slot 实现可展开的正文、引句、主张、证据关系、运行及产物卡片，附本地 fragment 定位；增加真实 React 渲染和引用跳转测试。compaction 的辅助 llm/stream 调用计入当前研究预算，保留原 provider/model，不重复计量普通 Agent 请求。Luna 真实调用暴露的首次 newResearch 误审批和可选版本号空字符串问题已修复并有回归。
 
+换设备同步前合并了 origin/main 的项目删除、文档/目录导入、刷新和启动更新。合并后 build 通过，完整回归 438 项（436 通过、2 跳过、0 失败）；native conversation smoke 与 59 文件的 package smoke 重新通过。build 清理 dist，必须先完成 build 再执行依赖 dist 的测试。
+
 用户已选择 TokenFans Luna 做真实验收。/codex 出现服务过载/无可路由节点；/v1/responses 的 gpt-6-luna 短请求和部分 Agent 工具调用曾成功，但完整任务因后续服务过载未完成。不能把此次网络可用性与局部调用说成科研质量通过。
 
 仍需完成：完整真实模型科研任务与科学内容人工验收；完整桌面中的证据卡片、缺失/折叠目标定位及审批呈现；真实长上下文、辅助调用计量和恢复；真实实验及反证处理。切换设备后的具体执行逻辑见[开发交接](development-handoff-2026-11-03.md)。没有通过这些检查前，不把整体改造标为全部完成。

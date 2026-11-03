@@ -123,6 +123,8 @@ node scripts/research-conversation-live.mjs --live --model gpt-6-luna --base-url
 
 ## 当前测试证据的范围
 
-先前完整回归为 433 项（431 通过、2 跳过）；之后新增了首次开启空参数、compaction 和证据视图等测试。最新同步前检查结果见[实现与验证](research-conversation.md)末尾。原始测试输出也在本地忽略目录，不把会话和凭据日志当源码上传。
+合并远端更新后重新验证：`npm run build` 通过；完整回归 438 项，436 通过、2 跳过、0 失败；native conversation smoke 和 package smoke 通过。smoke 使用真实 DSH Agent 与本地合成响应，完成 9 次模型调用，其中 8 次计入研究预算、64 个已报告 token，保存 2 次正文读取和 2 条匹配引用，Harness 重启后恢复且没有重复读取。package smoke 检查 59 个运行文件、4 条包含规则和 5 条敏感文件排除规则。
+
+build 会清理 dist，一些测试又依赖 dist 中的脚本产物；必须先完成 build 再跑 test，不能把二者并发执行。原始测试输出在本地忽略目录，不把会话和凭据日志当源码上传。
 
 新设备接手时可以直接把本文和产品方向文档交给开发 Agent，让它从“后续执行顺序”继续，并以当前代码和新测试输出为准。
