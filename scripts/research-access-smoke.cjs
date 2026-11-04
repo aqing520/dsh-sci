@@ -42,7 +42,7 @@ async function waitFor(operation) { while (Date.now() < deadline) { const value 
   await waitFor(() => Menu.getApplicationMenu()?.items[0]?.label === "dsh-sci");
   result.stage = "owner-window";
   const menu = Menu.getApplicationMenu().items[0].submenu;
-  await menu.items.find((item) => item.label === "Research Workspace").click();
+  await menu.items.find((item) => item.label === "研究记录").click();
   const owner = await waitFor(async () => { for (const window of BrowserWindow.getAllWindows()) if (await window.webContents.executeJavaScript("Boolean(window.researchApi && document.getElementById('create'))").catch(() => false)) return window; });
   const sourceFile = path.join(workspace, "source.txt");
   await fs.writeFile(sourceFile, "<img src=x onerror=window.sourceInjected=true> Bounded source preview for a read-only research session.");
@@ -120,6 +120,32 @@ async function waitFor(operation) { while (Date.now() < deadline) { const value 
   assert.ok(audits.some((entry) => entry.reason === "capability")); assert.ok(audits.some((entry) => entry.reason === "authentication"));
   assert.deepEqual(await readSnapshot(), before);
   Object.assign(result, { ownerCreatesFixture:true,readOnlyReads:true,sourcePreviewEscaped:true,projectUnchanged:true,noMemoryIndexWrites:true,refreshPreservesReadOnly:true,unboundWindowRejected:true,replacementDocumentRejected:true,popupsDenied:true,denialsAudited:true,verificationScope:"Production main, actual registered IPC, production preload, owner/read-only/unbound Electron windows; synthetic project only. No packaged-upgrade or scientific-quality acceptance." });
+  result.stage = "owner-annotation-edit";
+  const savedAnnotation = await owner.webContents.executeJavaScript(`researchApi.updateAnnotation({projectId:${JSON.stringify(fixture.projectId)},revision:0,title:'My research title',description:'My description',notes:'My summary'})`);
+  assert.equal(savedAnnotation.revision, 1);
+  assert.equal((await repository.readProjectAnnotation(fixture.projectId)).notes, "My summary");
+  assert.deepEqual(await repository.readProject(fixture.projectId), before.project);
+  await owner.webContents.executeJavaScript("document.getElementById('refresh').click()");
+  await waitFor(() => owner.webContents.executeJavaScript("document.querySelector('[data-select-project] strong')?.textContent === 'My research title'").catch(() => false));
+  assert.equal(await owner.webContents.executeJavaScript("document.querySelector('[data-select-project] strong').textContent"), "My research title");
+  result.ownerAnnotationSaved = true; result.annotationSurvivesRefresh = true;
+  result.stage = "large-settings-page";
+  const captureRoot = path.join(temp, "user-data/capture");
+  await fs.mkdir(path.join(captureRoot, "sessions"), { recursive: true });
+  const largeSession = { schema: "dsh-sci.session-index.v1", sessionId: "large-history-fixture", createdAt: new Date().toISOString(), status: "disposed", eventCount: 0, observedPaths: Array.from({ length: 30000 }, (_, index) => `src/fixture-${index}/research-observation.txt`) };
+  await fs.writeFile(path.join(captureRoot, "sessions/index.json"), JSON.stringify({ sessions: [largeSession] }));
+  await menu.items.find(item => item.label === "设置").click();
+  const settings = await waitFor(async () => { for (const window of BrowserWindow.getAllWindows()) if (await window.webContents.executeJavaScript("Boolean(window.captureApi && document.getElementById('settings-form'))").catch(() => false)) return window; });
+  assert.match(settings.webContents.getURL(), /^dsh-sci-page:\/\/settings\//);
+  const pageSize = await settings.webContents.executeJavaScript("document.documentElement.outerHTML.length");
+  assert.ok(pageSize > 2 * 1024 * 1024, `Expected oversized history fixture, received ${pageSize}`);
+  assert.equal(await settings.webContents.executeJavaScript("document.querySelector('h1').textContent"), "设置");
+  const previousSettingsUrl = settings.webContents.getURL();
+  await settings.webContents.executeJavaScript("document.getElementById('refresh').click()");
+  await waitFor(async () => settings.webContents.getURL() !== previousSettingsUrl && await settings.webContents.executeJavaScript("Boolean(document.getElementById('settings-form'))").catch(() => false));
+  assert.equal(await settings.webContents.executeJavaScript("Boolean(document.getElementById('settings-form'))"), true);
+  result.largeSettingsPage = true; result.settingsRefresh = true; result.settingsPageCharacters = pageSize;
+  settings.close();
   passed = true;
 })().catch((error) => { result.failure = error.stack ?? String(error); result.diagnosticsDirectory = temp; process.exitCode = 1; }).finally(async () => {
   const save = () => {

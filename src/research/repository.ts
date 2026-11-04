@@ -68,6 +68,16 @@ export type ResearchApprovalItem =
   | { kind: "task"; project: ResearchProject; plan: ResearchPlan; task: ResearchTask }
   | { kind: "experiment"; project: ResearchProject; task?: ResearchTask; experiment: ExperimentDefinition };
 
+export interface ResearchProjectAnnotation {
+  schema: "dsh-sci.research-project-annotation.v1";
+  projectId: string;
+  revision: number;
+  title: string;
+  description: string;
+  notes: string;
+  updatedAt: string;
+}
+
 /** Durable project/plan/event storage used by both the desktop and DSH plugin. */
 export class ResearchRepository {
   readonly root: string;
@@ -97,6 +107,25 @@ export class ResearchRepository {
   async readProject(projectId: string): Promise<ResearchProject | undefined> {
     if (await this.isDeleted(projectId)) return undefined;
     return this.readOptionalJson<ResearchProject>(path.join("projects", segment(projectId), "project.json"));
+  }
+  async readProjectAnnotation(projectId: string): Promise<ResearchProjectAnnotation | undefined> {
+    if (!await this.readProject(projectId)) return undefined;
+    return this.readOptionalJson<ResearchProjectAnnotation>(path.join("projects", segment(projectId), "annotation.json"));
+  }
+  async saveProjectAnnotation(projectId: string, input: { revision: number; title: string; description: string; notes: string }): Promise<ResearchProjectAnnotation> {
+    if (!input || !Number.isSafeInteger(input.revision) || input.revision < 0) throw new Error("Invalid annotation revision");
+    for (const [field, maximum] of [["title", 240], ["description", 12_000], ["notes", 32_000]] as const) {
+      if (typeof input[field] !== "string" || input[field].length > maximum || (field === "title" && !input[field].trim())) throw new Error(`Invalid annotation ${field}`);
+    }
+    return this.projectWrite(projectId, async () => {
+      await this.assertNotDeleted(projectId);
+      if (!await this.readProject(projectId)) throw new Error("Research project not found");
+      const previous = await this.readProjectAnnotation(projectId);
+      if ((previous?.revision ?? 0) !== input.revision) throw new Error("研究说明已在其他窗口更新，请刷新后再编辑。当前输入仍保留。");
+      const annotation: ResearchProjectAnnotation = { schema: "dsh-sci.research-project-annotation.v1", projectId, revision: input.revision + 1, title: input.title.trim(), description: input.description.trim(), notes: input.notes.trim(), updatedAt: new Date().toISOString() };
+      await this.writeRawTextUnchecked(path.join("projects", segment(projectId), "annotation.json"), serializeMetadataJson(annotation, this.metadataPassphrase));
+      return annotation;
+    });
   }
   async readConversationBinding(key: string): Promise<ResearchConversationBinding | undefined> {
     if (!/^[a-f0-9]{64}$/u.test(key)) throw new Error("Invalid research conversation key");
@@ -532,11 +561,11 @@ export class ResearchRepository {
     const timestamp = (item: ResearchApprovalItem) => item.kind === "task" ? item.task.updatedAt : item.experiment.createdAt;
     return items.sort((a, b) => timestamp(a).localeCompare(timestamp(b))).slice(0, Math.max(1, limit));
   }
-  async exportProject(projectId: string): Promise<{ project: ResearchProject; plan?: ResearchPlan; budget?: ResearchBudget; events: ResearchEvent[]; sources: ResearchSource[]; sourceContents: SourceContentSummary[]; sourceReads: SourceReadReceipt[]; searchLogs: ResearchSearchLog[]; evidenceReviews: ResearchEvidenceReview[]; sourceAcquisitions: SourceAcquisition[]; sourceRelations?: ResearchSourceRelation[]; designReviews?: ResearchDesignReview[]; hypotheses: ResearchHypothesis[]; experimentDesigns: ResearchExperimentDesign[]; codeBundles?: ResearchCodeBundle[]; codeReads?: ResearchCodeRead[]; codeReviews?: ResearchCodeReview[]; citations: ResearchCitation[]; claims: ResearchClaim[]; evidence: ResearchEvidenceLink[]; experiments: ExperimentDefinition[]; experimentRuns: ExperimentRun[]; artifacts: ResearchArtifact[]; evaluations: ResearchEvaluation[]; decisions?: ResearchDecision[]; reports: ResearchReport[]; reportReviews?: ResearchReportReview[] }> {
+  async exportProject(projectId: string): Promise<{ project: ResearchProject; annotation?: ResearchProjectAnnotation; plan?: ResearchPlan; budget?: ResearchBudget; events: ResearchEvent[]; sources: ResearchSource[]; sourceContents: SourceContentSummary[]; sourceReads: SourceReadReceipt[]; searchLogs: ResearchSearchLog[]; evidenceReviews: ResearchEvidenceReview[]; sourceAcquisitions: SourceAcquisition[]; sourceRelations?: ResearchSourceRelation[]; designReviews?: ResearchDesignReview[]; hypotheses: ResearchHypothesis[]; experimentDesigns: ResearchExperimentDesign[]; codeBundles?: ResearchCodeBundle[]; codeReads?: ResearchCodeRead[]; codeReviews?: ResearchCodeReview[]; citations: ResearchCitation[]; claims: ResearchClaim[]; evidence: ResearchEvidenceLink[]; experiments: ExperimentDefinition[]; experimentRuns: ExperimentRun[]; artifacts: ResearchArtifact[]; evaluations: ResearchEvaluation[]; decisions?: ResearchDecision[]; reports: ResearchReport[]; reportReviews?: ResearchReportReview[] }> {
     const project = await this.readProject(projectId); if (!project) throw new Error(`research project not found: ${projectId}`);
     const plan = project.planId ? await this.readPlan(project.projectId, project.planId) : undefined;
     const [sources, citations, claims, evidence, experiments, experimentRuns, artifacts, evaluations, decisions, reports, reportReviews, hypotheses, experimentDesigns, codeBundles] = await Promise.all([this.listSources(projectId), this.listCitations(projectId), this.listClaims(projectId), this.listEvidenceLinks(projectId), this.listExperiments(projectId), this.listExperimentRuns(projectId), this.listArtifacts(projectId), this.listEvaluations(projectId), this.listDecisions(projectId), this.listReports(projectId), this.listReportReviews(projectId), this.listHypotheses(projectId), this.listExperimentDesigns(projectId), this.listCodeBundles(projectId)]);
-    return { project, plan, budget: await this.readBudget(projectId), events: await this.listEvents(projectId, 10_000), sources, sourceContents: await this.listSourceContents(projectId), sourceReads: await this.listSourceReads(projectId), searchLogs: await this.listSearchLogs(projectId), evidenceReviews: await this.listEvidenceReviews(projectId), sourceAcquisitions: await this.listSourceAcquisitions(projectId), sourceRelations: await this.listSourceRelations(projectId), designReviews: await this.listDesignReviews(projectId), hypotheses, experimentDesigns, codeBundles, codeReads: await this.listCodeReads(projectId), codeReviews: await this.listCodeReviews(projectId), citations, claims, evidence, experiments, experimentRuns, artifacts, evaluations, decisions, reports, reportReviews };
+    return { project, annotation: await this.readProjectAnnotation(projectId), plan, budget: await this.readBudget(projectId), events: await this.listEvents(projectId, 10_000), sources, sourceContents: await this.listSourceContents(projectId), sourceReads: await this.listSourceReads(projectId), searchLogs: await this.listSearchLogs(projectId), evidenceReviews: await this.listEvidenceReviews(projectId), sourceAcquisitions: await this.listSourceAcquisitions(projectId), sourceRelations: await this.listSourceRelations(projectId), designReviews: await this.listDesignReviews(projectId), hypotheses, experimentDesigns, codeBundles, codeReads: await this.listCodeReads(projectId), codeReviews: await this.listCodeReviews(projectId), citations, claims, evidence, experiments, experimentRuns, artifacts, evaluations, decisions, reports, reportReviews };
   }
 
   private entityPath(projectId: string, collection: string, entityId: string): string { return path.join("projects", segment(projectId), collection, `${segment(entityId)}.json`); }

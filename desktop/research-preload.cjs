@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("researchApi", {
   openReadOnly: () => ipcRenderer.invoke("research:open-readonly"),
   listApprovalQueue: () => ipcRenderer.invoke("research:approval-queue"),
   create: (input) => ipcRenderer.invoke("research:create", input),
+  updateAnnotation: (input) => ipcRenderer.invoke("research:annotation-update", input),
   deleteProject: (projectId) => ipcRenderer.invoke("research:delete", projectId),
   activate: (projectId) => ipcRenderer.invoke("research:activate", projectId),
   startNext: (projectId) => ipcRenderer.invoke("research:start-next", projectId),

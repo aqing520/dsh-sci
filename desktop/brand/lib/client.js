@@ -408,8 +408,8 @@ html body:not([data-ds-dark-theme]) .uV2eYG_card:focus-within {
 						type: "button",
 						className: "dsh-sci-titlebar-btn",
 						onClick: () => window.dshSciDesktop?.openCaptureHistory?.(),
-						title: "查看本地捕获历史与服务配置 (Capture History)",
-						children: "捕获与配置"
+						title: "管理本地记录、备份恢复和高级诊断",
+						children: "设置"
 					})
 				]
 			});

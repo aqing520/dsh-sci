@@ -1,9 +1,10 @@
-import { app, BrowserWindow, Menu, ipcMain, clipboard, dialog } from "electron";
+import { app, BrowserWindow, Menu, ipcMain, clipboard, dialog, protocol } from "electron";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildProviderProfilePatch, providerProfileIdentity } from "./provider-profile.mjs";
 import { createResearchIpcRegistrar, createResearchWindowRegistry } from "./research-access.mjs";
+import { createLocalPages } from "./local-page.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ownsInstance = app.requestSingleInstanceLock();
@@ -36,6 +37,7 @@ let captureStore;
 let researchRepository;
 let researchOrchestrator;
 let captureDashboardWindow;
+let localPages;
 let researchDashboardWindow;
 let researchReadOnlyWindow;
 const researchWindows = createResearchWindowRegistry();
@@ -134,12 +136,19 @@ function createWindow(url, options = {}) {
 async function openCaptureDashboard() {
   if (captureDashboardWindow && !captureDashboardWindow.isDestroyed()) { captureDashboardWindow.focus(); return; }
   if (!captureStore) return;
-  const { renderCaptureDashboard } = await import("./capture-dashboard.mjs");
-  const data = await readCaptureDashboardData();
-  captureDashboardWindow = new BrowserWindow({ width: 1280, height: 820, minWidth: 900, minHeight: 600, title: "dsh-sci Capture History", webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(here, "capture-preload.cjs") } });
-  captureDashboardWindow.on("closed", () => { captureDashboardWindow = undefined; });
-  const html = renderCaptureDashboard({ ...data, provider: providerRuntimeConfig, runtimeSettings, service: dashboardServiceStatus() });
-  captureDashboardWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  const url = await captureDashboardUrl();
+  captureDashboardWindow = new BrowserWindow({ width: 1280, height: 820, minWidth: 900, minHeight: 600, title: "设置 · dsh-sci", webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(here, "capture-preload.cjs") } });
+  captureDashboardWindow.on("closed", () => { captureDashboardWindow = undefined; localPages?.clear("settings"); });
+  try { await captureDashboardWindow.loadURL(url); }
+  catch (error) {
+    captureDashboardWindow.destroy();
+    throw error;
+  }
+}
+
+async function readResearchDashboardProjects(limit = 100) {
+  const projects = await researchRepository.listProjects(limit);
+  return Promise.all(projects.map(async (project) => ({ ...project, annotation: await researchRepository.readProjectAnnotation(project.projectId) })));
 }
 
 async function openResearchDashboard(access = "owner") {
@@ -147,8 +156,8 @@ async function openResearchDashboard(access = "owner") {
   if (current && !current.isDestroyed()) { current.focus(); return; }
   if (!researchRepository) return;
   const { renderResearchDashboard } = await import("./research-dashboard.mjs");
-  const projects = await researchRepository.listProjects(100);
-  const window = new BrowserWindow({ width: 1100, height: 760, minWidth: 820, minHeight: 560, title: access === "read-only" ? "Research Workspace (Read Only)" : "dsh-sci Research Workspace", webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(here, "research-preload.cjs") } });
+  const projects = await readResearchDashboardProjects();
+  const window = new BrowserWindow({ width: 1100, height: 760, minWidth: 820, minHeight: 560, title: access === "read-only" ? "Research Workspace (Read Only)" : "研究记录 · dsh-sci", webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(here, "research-preload.cjs") } });
   if (access === "read-only") researchReadOnlyWindow = window; else researchDashboardWindow = window;
   window.on("closed", () => { if (access === "read-only") researchReadOnlyWindow = undefined; else researchDashboardWindow = undefined; });
   const url = `data:text/html;charset=utf-8,${encodeURIComponent(renderResearchDashboard({ projects, readOnly: access === "read-only" }))}`;
@@ -158,10 +167,10 @@ async function openResearchDashboard(access = "owner") {
 
 async function researchDashboardUrl(event) {
   const { renderResearchDashboard } = await import("./research-dashboard.mjs");
-  const projects = await researchRepository.listProjects(100);
+  const projects = await readResearchDashboardProjects();
   const url = `data:text/html;charset=utf-8,${encodeURIComponent(renderResearchDashboard({ projects, readOnly: researchWindows.access(event) === "read-only" }))}`;
   researchWindows.permitDocument(event.sender, url);
-  setTimeout(() => { if (!event.sender.isDestroyed() && event.sender.getURL() !== url) void event.sender.loadURL(url).catch(() => undefined); }, 30);
+  setTimeout(() => { if (!event.sender.isDestroyed() && !event.sender.isLoadingMainFrame() && event.sender.getURL() !== url) void event.sender.loadURL(url).catch(() => undefined); }, 30);
   return url;
 }
 
@@ -180,7 +189,8 @@ async function captureDashboardUrl() {
   const { renderCaptureDashboard } = await import("./capture-dashboard.mjs");
   const data = await readCaptureDashboardData();
   const html = renderCaptureDashboard({ ...data, provider: providerRuntimeConfig, runtimeSettings, service: dashboardServiceStatus() });
-  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+  localPages ??= createLocalPages(protocol);
+  return localPages.set("settings", html);
 }
 
 function installCaptureIpc() {
@@ -269,7 +279,7 @@ function installCaptureIpc() {
     assertCaptureWindow(event);
     if (!captureStore) throw new Error("Capture store is not ready");
     const url = await captureDashboardUrl();
-    setTimeout(() => { if (!event.sender.isDestroyed() && event.sender.getURL() !== url) void event.sender.loadURL(url).catch(() => undefined); }, 30);
+    setTimeout(() => { if (!event.sender.isDestroyed() && !event.sender.isLoadingMainFrame() && event.sender.getURL() !== url) void event.sender.loadURL(url).catch(() => undefined); }, 30);
     return url;
   });
   ipcMain.handle("service:search", async (event, query) => {
@@ -313,6 +323,12 @@ function installCaptureIpc() {
     if (!researchOrchestrator) throw new Error("Research orchestrator is not ready");
     if (!input || typeof input.question !== "string") throw new Error("Research question is required");
     return researchOrchestrator.createProject(input.question, { title: typeof input.title === "string" ? input.title : undefined, plan: input.plan, budget: input.budget });
+  });
+  researchIpc.handle("research:annotation-update", async (event, input) => {
+    assertResearchWindow(event);
+    if (!researchRepository) throw new Error("Research repository is not ready");
+    if (!input || typeof input.projectId !== "string" || !input.projectId.trim()) throw new Error("Research project ID is required");
+    return researchRepository.saveProjectAnnotation(input.projectId, input);
   });
   researchIpc.handle("research:delete", async (event, input) => {
     assertResearchWindow(event);
@@ -475,7 +491,7 @@ async function publishLocalMetadataBackup() {
 
 function installApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: "dsh-sci", submenu: [{ label: "Research Workspace", click: () => void openResearchDashboard() }, { label: "Research Workspace (Read Only)", click: () => void openResearchDashboard("read-only") }, { label: "Capture History", click: () => void openCaptureDashboard() }, { label: "Queue Metadata Backup", click: () => void publishLocalMetadataBackup() }, { type: "separator" }, { role: "quit" }] },
+    { label: "dsh-sci", submenu: [{ label: "研究记录", click: () => void openResearchDashboard() }, { label: "研究记录（只读）", click: () => void openResearchDashboard("read-only") }, { label: "设置", click: () => void openCaptureDashboard() }, { label: "备份本地记录", click: () => void publishLocalMetadataBackup() }, { type: "separator" }, { role: "quit" }] },
     // Native editing roles also register macOS Command-key shortcuts in inputs.
     { role: "editMenu" },
   ]));

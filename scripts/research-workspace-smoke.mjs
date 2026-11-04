@@ -68,6 +68,7 @@ try {
   window = new BrowserWindow({ show: false, width: 1100, height: 900, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: fileURLToPath(new URL("../desktop/research-preload.cjs", import.meta.url)) } });
   const authorized = (event) => assert.equal(event.sender, window.webContents);
   ipcMain.handle("research:export", (event, id) => { authorized(event); return repository.exportProject(id); });
+  ipcMain.handle("research:annotation-update", (event, input) => { authorized(event); return repository.saveProjectAnnotation(input.projectId, input); });
   ipcMain.handle("research:source-read", (event, input) => { authorized(event); return orchestrator.readSource(input.projectId, input, "workspace"); });
   ipcMain.handle("research:evidence-review-context", (event, input) => { authorized(event); return orchestrator.evidenceReviewContext(input.projectId, input.evidenceId); });
   ipcMain.handle("research:evidence-review", (event, input) => { authorized(event); return orchestrator.reviewEvidence(input.projectId, input.evidenceId, input); });
@@ -94,6 +95,46 @@ try {
   ipcMain.handle("research:budget-read", (event, id) => { authorized(event); return repository.readBudget(id); });
   ipcMain.handle("research:budget-update", (event, input) => { authorized(event); return orchestrator.updateBudget(input.projectId, input.limits); });
   await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(renderResearchDashboard({ projects: [budgetedProject, approvalProject.project, designProject.project, reportProject.project] })));
+  const detailControls = await window.webContents.executeJavaScript(`(async () => {
+    const card = document.querySelector('.project');
+    const button = card.querySelector('[data-action="open"]');
+    const panel = card.querySelector('.project-details');
+    const open = async () => {
+      button.click();
+      for (let attempt = 0; attempt < 100 && button.disabled; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+      if (button.disabled || panel.hidden) throw new Error('Project details did not open');
+    };
+    await open();
+    const hasProject = JSON.parse(panel.querySelector('pre').textContent).project.projectId === card.dataset.project;
+    const boundedHeight = getComputedStyle(panel.querySelector('pre')).maxHeight === '420px';
+    button.click();
+    const toggledClosed = panel.hidden;
+    await open();
+    panel.querySelector('.panel-heading button').click();
+    const closedWithButton = panel.hidden;
+    await open();
+    panel.querySelector('.panel-heading button').click();
+    return { hasProject, boundedHeight, toggledClosed, closedWithButton };
+  })()`);
+  assert.deepEqual(detailControls, { hasProject: true, boundedHeight: true, toggledClosed: true, closedWithButton: true });
+  const libraryControls = await window.webContents.executeJavaScript(`(async () => {
+    const items = [...document.querySelectorAll('[data-select-project]')];
+    const cards = [...document.querySelectorAll('.project[data-project]')];
+    const visibleCount = () => cards.filter(card => !card.hidden).length;
+    const initialSingleProject = visibleCount() === 1;
+    items[1].click();
+    const selected = cards.find(card => card.dataset.project === items[1].dataset.selectProject);
+    for (let attempt = 0; attempt < 100 && !selected.querySelector('.research-stats'); attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+    const switched = visibleCount() === 1 && !selected.hidden && Boolean(selected.querySelector('.research-stats'));
+    const input = document.getElementById('research-filter');
+    input.value = 'no-matching-project-xyz'; input.dispatchEvent(new Event('input'));
+    const emptySearch = items.every(item => item.hidden) && !document.getElementById('research-no-matches').hidden;
+    input.value = ''; input.dispatchEvent(new Event('input'));
+    const resetSearch = items.every(item => !item.hidden);
+    items[0].click();
+    return { initialSingleProject, switched, emptySearch, resetSearch };
+  })()`);
+  assert.deepEqual(libraryControls, { initialSingleProject: true, switched: true, emptySearch: true, resetSearch: true });
   await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
     const card = document.querySelector('.project');
     const observer = new MutationObserver(() => { if (card.querySelector('.budget-form')) { clearTimeout(timer); observer.disconnect(); resolve(true); } });
@@ -412,6 +453,66 @@ try {
   console.log(JSON.stringify({ reportDraftGate: true, reportHumanReviewPersisted: true, reportStaleAfterUpstreamChange: true, staleReportReviewDisabled: true, reportDownloadsUseReadOnlyExport: true, scientificQuality: "not-reviewed; synthetic UI fixture" }));
   console.log(JSON.stringify({ codeContentPreview: true, codeContentEscaped: true, contentReviewBeforeApproval: true, changedInputRefusedBeforeApproval: true, changedCodeRefusedAfterApproval: true, refusedChangesStartNoProcess: true, contentApprovalPersisted: true, runManifestBound: true, scientificQuality: "not-reviewed; synthetic UI fixture" }));
   console.log(JSON.stringify({ designReview: true, designQualityReviewPersisted: true, staleDesignReviewDisplayed: true, staleDesignReviewDisabled: true, designApprovalPersisted: true, designEscaped: true, designApprovalDoesNotExecute: true, scientificQuality: "not-reviewed; synthetic UI fixture" }));
+  const beforeOverview = await repository.exportProject(reportProjectId);
+  const reportOverview = await window.webContents.executeJavaScript(`(async () => {
+    const item = [...document.querySelectorAll('[data-select-project]')].find(item => item.dataset.selectProject === ${JSON.stringify(reportProjectId)});
+    item.click();
+    const card = [...document.querySelectorAll('.project')].find(card => card.dataset.project === item.dataset.selectProject);
+    for (let attempt = 0; attempt < 100 && !card.querySelector('.report-summary'); attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+    const report = card.querySelector('.report-summary');
+    if (!report) throw new Error('Saved report did not appear in the overview');
+    report.open = true;
+    for (let attempt = 0; attempt < 100 && !report.textContent.includes('报告状态 ·'); attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+    return { reportVisible: Boolean(report.querySelector('.report-text').textContent), statusLoaded: report.textContent.includes('报告状态 ·'), claimsVisible: Boolean(card.querySelector('.finding')) };
+  })()`);
+  assert.deepEqual(reportOverview, { reportVisible: true, statusLoaded: true, claimsVisible: true });
+  assert.deepEqual(await repository.exportProject(reportProjectId), beforeOverview);
+  const originalProject = await repository.readProject(project.projectId);
+  const annotationControls = await window.webContents.executeJavaScript(`(async () => {
+    const item = document.querySelector('[data-select-project]'); item.click();
+    const card = document.querySelector('.project'); card.querySelector('[data-action="edit"]').click();
+    for (let attempt = 0; attempt < 100 && !card.querySelector('.project-edit-form'); attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+    const form = card.querySelector('.project-edit-form');
+    form.elements.title.value = 'My <img src=x onerror=window.annotationInjected=true> title';
+    form.elements.description.value = 'My research scope';
+    form.elements.notes.value = 'My own summary'; form.requestSubmit();
+    for (let attempt = 0; attempt < 100 && !card.querySelector('.project-editor').hidden; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+    const saved = card.querySelector('.project-title').textContent === form.elements.title.value && item.querySelector('strong').textContent === form.elements.title.value;
+    card.querySelector('[data-action="edit"]').click();
+    for (let attempt = 0; attempt < 100 && card.querySelector('.project-editor').hidden; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+    const reopened = card.querySelector('.project-edit-form');
+    const persisted = reopened.elements.notes.value === 'My own summary' && reopened.elements.description.value === 'My research scope';
+    reopened.querySelector('button[type="button"]').click();
+    return { saved, persisted, escaped: !window.annotationInjected && !card.querySelector('.project-title img') };
+  })()`);
+  assert.deepEqual(annotationControls, { saved: true, persisted: true, escaped: true });
+  assert.deepEqual(await repository.readProject(project.projectId), originalProject);
+  const { renderCaptureDashboard } = await import("../desktop/capture-dashboard.mjs");
+  const captureWindow = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "desktop", "capture-preload.cjs") } });
+  let savedCaptureSettings;
+  ipcMain.handle("capture:update-settings", (_event, settings) => { savedCaptureSettings = settings; return { status: { state: "capturing" } }; });
+  try {
+    await captureWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(renderCaptureDashboard({ status: { state: "capturing" }, settings: { enabled: true, maxSnapshots: 20, maxResearchRecords: 30, retentionDays: 7 } })));
+    const settingsControls = await captureWindow.webContents.executeJavaScript(`(async () => {
+      const sections = [...document.querySelectorAll('[data-settings-section]')];
+      const visible = () => sections.filter(section => !section.hidden).map(section => section.dataset.settingsSection);
+      const initialGeneral = visible().every(group => group === 'general');
+      const input = document.getElementById('max-snapshots'); input.value = '42';
+      let categoriesSwitch = true;
+      for (const tab of document.querySelectorAll('[data-settings-tab]')) {
+        tab.click();
+        categoriesSwitch = categoriesSwitch && visible().length > 0 && visible().every(group => group === tab.dataset.settingsTab);
+      }
+      document.querySelector('[data-settings-tab="general"]').click();
+      const formPreserved = input.value === '42';
+      document.getElementById('settings-form').requestSubmit();
+      for (let attempt = 0; attempt < 100 && document.getElementById('settings-message').textContent !== '已保存'; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+      return { initialGeneral, categoriesSwitch, formPreserved, saved: document.getElementById('settings-message').textContent === '已保存' };
+    })()`);
+    assert.deepEqual(settingsControls, { initialGeneral: true, categoriesSwitch: true, formPreserved: true, saved: true });
+    assert.equal(savedCaptureSettings.maxSnapshots, 42);
+  } finally { captureWindow.destroy(); ipcMain.removeHandler("capture:update-settings"); }
+  console.log(JSON.stringify({ researchLibraryNavigation: true, researchLibrarySearch: true, settingsCategories: true, settingsFormPreserved: true, captureSettingsSaved: true }));
   console.log(JSON.stringify({ ok: true, renderer: "Electron", conflicts: 2, reviewPersisted: true, searchHits: 1, escapedMemory: true, approvalQueue: true, approvedExperiment: true, reportReadOnly: true, budgetPersisted: true, budgetCountersPreserved: true, budgetDoesNotResume: true, sourceReadBounded: true, sourceEscaped: true, evidenceReviewPersisted: true, workspaceDoesNotCompleteAgentReading: true, scientificQuality: "not-reviewed; synthetic UI fixture" }));
 } catch (error) {
   console.error(error?.stack ?? JSON.stringify(error));

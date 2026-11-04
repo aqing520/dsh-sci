@@ -25,7 +25,7 @@ test("capture dashboard escapes local metadata", () => {
   assert.match(html, /offline/);
   assert.match(html, /Capture settings/);
   assert.match(html, /value="20"/);
-  assert.match(html, /Apply cleanup now/);
+  assert.match(html, /立即按保留规则清理/);
   assert.match(html, /<details>/);
   assert.match(html, /Backup queue/);
   assert.match(html, /retrying/);
@@ -34,12 +34,12 @@ test("capture dashboard escapes local metadata", () => {
   assert.match(html, /Session timeline/);
   assert.match(html, /Research runs/);
   assert.match(html, /Artifacts and observed paths/);
-  assert.match(html, /Artifacts/);
+  assert.match(html, /产物/);
   assert.match(html, /Service tools/);
   assert.match(html, /Effective configuration/);
   assert.match(html, /Model gateway/);
   assert.match(html, /runtime-settings-form/);
-  assert.match(html, /Save non-sensitive settings/);
+  assert.match(html, /保存运行参数/);
   assert.match(html, /api\.runtimeSettings/);
   assert.match(html, /Service status/);
   assert.match(html, /quota-state/);
@@ -55,7 +55,7 @@ test("capture dashboard escapes local metadata", () => {
   assert.match(html, /Service not configured/);
   assert.match(html, /id="refresh"/);
   assert.match(html, /api\.refresh/);
-  assert.match(html, /Download recovery audit/);
+  assert.match(html, /下载恢复检查结果/);
   assert.match(html, /Recovery audit/);
   assert.match(html, /api\.recoveryAudit/);
   assert.match(html, /Restore metadata bundle/);
